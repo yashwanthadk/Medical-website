@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import test, { after, before } from 'node:test';
 
 process.env.TEST_DB_PATH = ':memory:';
 
+import vercelHandler from '../../api/index.ts';
 import { createApiApp } from '../app.ts';
-import { closeDb, getDb } from '../core/database.ts';
+import { config } from '../core/config.ts';
+import { closeDb, ensureDbReady } from '../core/database.ts';
 import { setAIProviderForTests, type AIProvider } from '../services/aiService.ts';
 
 let server: http.Server;
+let vercelServer: http.Server;
 let baseUrl = '';
+let vercelBaseUrl = '';
 
 const mockTestAIProvider: AIProvider = {
   async analyzeXRay() {
@@ -99,8 +105,9 @@ const mockTestAIProvider: AIProvider = {
 };
 
 before(async () => {
-  getDb();
+  await ensureDbReady();
   setAIProviderForTests(mockTestAIProvider);
+
   const app = createApiApp();
   server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -108,11 +115,26 @@ before(async () => {
   if (addr && typeof addr !== 'string') {
     baseUrl = `http://127.0.0.1:${addr.port}`;
   }
+
+  vercelServer = http.createServer((req, res) => {
+    void vercelHandler(req, res);
+  });
+  vercelServer.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => vercelServer.once('listening', resolve));
+  const vAddr = vercelServer.address();
+  if (vAddr && typeof vAddr !== 'string') {
+    vercelBaseUrl = `http://127.0.0.1:${vAddr.port}`;
+  }
 });
 
-after(() => {
+after(async () => {
   server?.close();
-  closeDb();
+  vercelServer?.close();
+  await closeDb();
+  const privateDir = path.resolve(config.privateStorageDir);
+  if (fs.existsSync(privateDir)) {
+    fs.rmSync(privateDir, { recursive: true, force: true });
+  }
 });
 
 test('Health and Readiness endpoints respond properly', async () => {
@@ -139,7 +161,6 @@ test('Registration, login, forgot password, and new create password flow', async
   const regData = (await regRes.json()) as { token: string; user: { id: string } };
   assert.ok(regData.token);
 
-  // Login works
   const loginRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -150,7 +171,6 @@ test('Registration, login, forgot password, and new create password flow', async
   });
   assert.equal(loginRes.status, 200);
 
-  // Forgot password -> Reset (New Create Password)
   const forgotRes = await fetch(`${baseUrl}/api/v1/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -172,7 +192,6 @@ test('Registration, login, forgot password, and new create password flow', async
   });
   assert.equal(resetRes.status, 200);
 
-  // Old password rejected, new password accepted
   const oldLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -188,8 +207,7 @@ test('Registration, login, forgot password, and new create password flow', async
   assert.equal(newLogin.status, 200);
 });
 
-test('Upload validation rejects spoofed file signature & enforces strict user isolation', async () => {
-  // Register User A & User B
+test('Upload validation, DB binary fallback, strict user isolation, analysis & chat', async () => {
   const userARes = await fetch(`${baseUrl}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -200,7 +218,7 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
       confirmPassword: 'Password123',
     }),
   });
-  const userA = (await userARes.json()) as { token: string };
+  const userA = (await userARes.json()) as { token: string; user: { id: string } };
 
   const userBRes = await fetch(`${baseUrl}/api/v1/auth/register`, {
     method: 'POST',
@@ -225,7 +243,7 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   });
   assert.equal(badUpload.status, 400);
 
-  // Valid PNG magic-byte upload for Blood Report
+  // Valid PNG upload for Blood Report
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00]);
   const goodForm = new FormData();
   goodForm.append('category', 'blood');
@@ -236,7 +254,17 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
     body: goodForm,
   });
   assert.equal(goodUpload.status, 201);
-  const uploadData = (await goodUpload.json()) as { fileId: string };
+  const uploadData = (await goodUpload.json()) as { fileId: string; signedPreviewUrl: string };
+
+  // Simulate ephemeral serverless filesystem wipe: remove disk copy, verify DB file_data serves preview
+  const userDiskDir = path.join(config.privateStorageDir, userA.user.id);
+  if (fs.existsSync(userDiskDir)) {
+    fs.rmSync(userDiskDir, { recursive: true, force: true });
+  }
+  const previewRes = await fetch(`${baseUrl}${uploadData.signedPreviewUrl}`);
+  assert.equal(previewRes.status, 200);
+  const previewBuf = Buffer.from(await previewRes.arrayBuffer());
+  assert.deepEqual(previewBuf, pngHeader);
 
   // User B cannot access User A's file
   const crossFile = await fetch(`${baseUrl}/api/v1/uploads/${uploadData.fileId}`, {
@@ -244,7 +272,7 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   });
   assert.equal(crossFile.status, 403);
 
-  // Trigger Blood Analysis for User A
+  // Trigger Blood Analysis for User A (uses DB file_data fallback since disk copy was wiped)
   const triggerRes = await fetch(`${baseUrl}/api/v1/analysis/blood`, {
     method: 'POST',
     headers: {
@@ -259,7 +287,6 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
     reportId: string;
   };
 
-  // Poll until completed
   let status = 'queued';
   for (let i = 0; i < 25; i++) {
     const statusRes = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}/status`, {
@@ -272,7 +299,6 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   }
   assert.equal(status, 'completed');
 
-  // Verify User A gets structured blood markers
   const analysisRes = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}`, {
     headers: { Authorization: `Bearer ${userA.token}` },
   });
@@ -283,7 +309,16 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   assert.equal(analysisBody.bloodResults.length, 2);
   assert.equal(analysisBody.bloodResults[1].status, 'High');
 
-  // Verify User B cannot read User A's analysis or create chat session on User A's report
+  // Dashboard summary & History endpoints
+  const dashRes = await fetch(`${baseUrl}/api/v1/dashboard/summary`, {
+    headers: { Authorization: `Bearer ${userA.token}` },
+  });
+  assert.equal(dashRes.status, 200);
+  const dashBody = (await dashRes.json()) as { metrics: { totalReports: number; bloodCount: number } };
+  assert.equal(dashBody.metrics.totalReports, 1);
+  assert.equal(dashBody.metrics.bloodCount, 1);
+
+  // Verify User B isolation
   const crossAnalysis = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}`, {
     headers: { Authorization: `Bearer ${userB.token}` },
   });
@@ -299,7 +334,6 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   });
   assert.equal(crossChat.status, 403);
 
-  // User A creates chat session and asks a question
   const chatRes = await fetch(`${baseUrl}/api/v1/chat/sessions`, {
     method: 'POST',
     headers: {
@@ -322,4 +356,40 @@ test('Upload validation rejects spoofed file signature & enforces strict user is
   assert.equal(msgRes.status, 201);
   const msgBody = (await msgRes.json()) as { assistantMessage: { content: string } };
   assert.match(msgBody.assistantMessage.content, /attached report/);
+});
+
+test('Vercel serverless entrypoint handles rewritten API paths and query parameters cleanly', async () => {
+  const healthRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/health`);
+  assert.equal(healthRes.status, 200);
+  const healthJson = (await healthRes.json()) as { status: string };
+  assert.equal(healthJson.status, 'ok');
+
+  const readyRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/ready`);
+  assert.equal(readyRes.status, 200);
+  const readyJson = (await readyRes.json()) as { database: string };
+  assert.equal(readyJson.database, 'connected');
+
+  const regRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/api/v1/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'verceluser@example.com',
+      displayName: 'Vercel Patient',
+      password: 'Password123',
+      confirmPassword: 'Password123',
+    }),
+  });
+  assert.equal(regRes.status, 201);
+  const regBody = (await regRes.json()) as { token: string; user: { email: string } };
+  assert.equal(regBody.user.email, 'verceluser@example.com');
+
+  const historyRes = await fetch(
+    `${vercelBaseUrl}/api/index?__vercel_path=/api/v1/history&type=blood`,
+    {
+      headers: { Authorization: `Bearer ${regBody.token}` },
+    }
+  );
+  assert.equal(historyRes.status, 200);
+  const historyBody = (await historyRes.json()) as { items: unknown[] };
+  assert.ok(Array.isArray(historyBody.items));
 });

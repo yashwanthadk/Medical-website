@@ -31,7 +31,13 @@ import { DashboardLayout } from '../components/DashboardLayout';
 import { DropzoneUploader } from '../components/DropzoneUploader';
 import { JobStatusBanner } from '../components/JobStatusBanner';
 import { useAuth } from '../context/AuthContext';
-import { api, type AnalysisDetail, type AnalysisJobStatus, type BloodResultRow } from '../lib/api';
+import {
+  api,
+  resolveApiUrl,
+  type AnalysisDetail,
+  type AnalysisJobStatus,
+  type BloodResultRow,
+} from '../lib/api';
 import { downloadAnalysisSummary } from '../utils/downloadReport';
 
 const STATUS_STYLE: Record<string, { color: string; bg: string; icon: React.ReactNode }> = {
@@ -148,7 +154,12 @@ export function BloodReportPage() {
         token
       );
 
-      await pollUntilDone(started.analysisId);
+      if (started.status === 'completed') {
+        const detail = await api.getAnalysis(started.analysisId, token);
+        setAnalysis(detail);
+      } else {
+        await pollUntilDone(started.analysisId);
+      }
     } catch (err) {
       setIsUploading(false);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to analyze blood report.');
@@ -381,7 +392,7 @@ export function BloodReportPage() {
                   </span>
                   {analysis.file?.signedPreviewUrl && (
                     <a
-                      href={analysis.file.signedPreviewUrl}
+                      href={resolveApiUrl(analysis.file.signedPreviewUrl)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 font-medium text-sky-700 hover:text-sky-900 shrink-0"
@@ -395,12 +406,12 @@ export function BloodReportPage() {
                   analysis.file.mimeType === 'application/pdf' ? (
                     <iframe
                       title={analysis.title}
-                      src={analysis.file.signedPreviewUrl}
+                      src={resolveApiUrl(analysis.file.signedPreviewUrl)}
                       className="h-56 w-full rounded-lg border border-slate-200 bg-slate-50"
                     />
                   ) : (
                     <img
-                      src={analysis.file.signedPreviewUrl}
+                      src={resolveApiUrl(analysis.file.signedPreviewUrl)}
                       alt={analysis.title}
                       className="h-56 w-full rounded-lg border border-slate-200 object-contain bg-slate-50"
                     />

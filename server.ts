@@ -3,12 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { config } from './server/core/config.ts';
-import { getDb } from './server/core/database.ts';
+import { ensureDbReady } from './server/core/database.ts';
 import { createApiApp } from './server/app.ts';
 
 async function startServer() {
-  // Initialize SQLite database schema on startup
-  getDb();
+  // Initialize database schema on startup (PostgreSQL via DATABASE_URL or SQLite fallback)
+  await ensureDbReady();
 
   const app = createApiApp();
 

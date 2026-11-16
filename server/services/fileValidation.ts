@@ -12,6 +12,7 @@ export interface ValidatedUpload {
   mimeType: string;
   fileSize: number;
   sha256Hash: string;
+  fileBuffer: Buffer;
 }
 
 const ALLOWED_MIME_BY_CATEGORY: Record<FileCategory, string[]> = {
@@ -76,7 +77,9 @@ export function validateAndStoreBuffer(params: {
     throw new Error('Uploaded file is empty.');
   }
   if (buffer.length > config.maxUploadBytes) {
-    throw new Error(`File exceeds the maximum allowed size of ${Math.round(config.maxUploadBytes / (1024 * 1024))} MB.`);
+    throw new Error(
+      `File exceeds the maximum allowed size of ${Math.round(config.maxUploadBytes / (1024 * 1024))} MB.`
+    );
   }
 
   const ext = path.extname(originalName).toLowerCase();
@@ -97,13 +100,16 @@ export function validateAndStoreBuffer(params: {
     throw new Error(`File signature (${magicMime}) is not supported for ${category.toUpperCase()} analysis.`);
   }
 
-  // Ensure declared MIME isn't wildly inconsistent (e.g. executable disguised)
-  const normalizedDeclared = declaredMime.toLowerCase() === 'image/jpg' ? 'image/jpeg' : declaredMime.toLowerCase();
-  if (normalizedDeclared && normalizedDeclared !== 'application/octet-stream' && normalizedDeclared !== magicMime) {
+  const normalizedDeclared =
+    declaredMime.toLowerCase() === 'image/jpg' ? 'image/jpeg' : declaredMime.toLowerCase();
+  if (
+    normalizedDeclared &&
+    normalizedDeclared !== 'application/octet-stream' &&
+    normalizedDeclared !== magicMime
+  ) {
     throw new Error('Declared file MIME type does not match actual file contents.');
   }
 
-  // Basic script/payload scan inside image headers or suspicious PDF active exploit markers
   if (magicMime === 'application/pdf') {
     const headSample = buffer.subarray(0, Math.min(buffer.length, 65536)).toString('latin1');
     if (/\/Launch\b|\/RichMedia\b/i.test(headSample)) {
@@ -111,16 +117,20 @@ export function validateAndStoreBuffer(params: {
     }
   }
 
-  ensureStorageDirs();
-  const userDir = path.join(config.privateStorageDir, userId);
-  fs.mkdirSync(userDir, { recursive: true });
-
   const sha256Hash = crypto.createHash('sha256').update(buffer).digest('hex');
-  const storedExt = magicMime === 'application/pdf' ? '.pdf' : magicMime === 'image/png' ? '.png' : '.jpg';
+  const storedExt =
+    magicMime === 'application/pdf' ? '.pdf' : magicMime === 'image/png' ? '.png' : '.jpg';
   const storedFilename = `${crypto.randomUUID()}${storedExt}`;
+  const userDir = path.join(config.privateStorageDir, userId);
   const storagePath = path.join(userDir, storedFilename);
 
-  fs.writeFileSync(storagePath, buffer, { mode: 0o600 });
+  try {
+    ensureStorageDirs();
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(storagePath, buffer, { mode: 0o600 });
+  } catch {
+    // On read-only or ephemeral runtimes, the binary is still preserved in uploaded_files.file_data
+  }
 
   return {
     safeOriginalName: sanitizeFilename(originalName),
@@ -129,6 +139,7 @@ export function validateAndStoreBuffer(params: {
     mimeType: magicMime,
     fileSize: buffer.length,
     sha256Hash,
+    fileBuffer: buffer,
   };
 }
 

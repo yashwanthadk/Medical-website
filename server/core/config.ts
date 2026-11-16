@@ -1,11 +1,19 @@
 import dotenv from 'dotenv';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 dotenv.config();
 
-const STORAGE_ROOT = path.resolve(process.cwd(), 'server/storage');
+export const isServerless = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NOW_REGION
+);
+
+const STORAGE_ROOT = isServerless
+  ? path.join(os.tmpdir(), 'mediexplain-storage')
+  : path.resolve(process.cwd(), 'server/storage');
 const PRIVATE_STORAGE_DIR = path.join(STORAGE_ROOT, 'private');
 const SECRET_FILE = path.join(STORAGE_ROOT, '.session_secret');
 
@@ -18,6 +26,14 @@ function resolveSessionSecret(): string {
   if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16) {
     return process.env.SESSION_SECRET;
   }
+
+  // On serverless (Vercel), /tmp is not shared across Lambdas, so derive a deterministic
+  // fallback from server-only env + project config if SESSION_SECRET wasn't explicitly set.
+  if (isServerless) {
+    const seed = `${process.env.GEMINI_API_KEY || ''}:${firebaseConfig.projectId}:${firebaseConfig.apiKey}`;
+    return crypto.createHash('sha256').update(seed).digest('hex');
+  }
+
   ensureStorageDirs();
   if (fs.existsSync(SECRET_FILE)) {
     const existing = fs.readFileSync(SECRET_FILE, 'utf8').trim();
@@ -31,11 +47,17 @@ function resolveSessionSecret(): string {
 export const config = {
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || 'development',
-  maxUploadBytes: Number(process.env.MAX_UPLOAD_SIZE_MB || 20) * 1024 * 1024,
+  isServerless,
+  maxUploadBytes: isServerless
+    ? Math.min(Number(process.env.MAX_UPLOAD_SIZE_MB || 4), 4) * 1024 * 1024
+    : Number(process.env.MAX_UPLOAD_SIZE_MB || 20) * 1024 * 1024,
   storageRoot: STORAGE_ROOT,
   privateStorageDir: PRIVATE_STORAGE_DIR,
   get dbPath(): string {
     return process.env.TEST_DB_PATH || path.join(STORAGE_ROOT, 'mediexplain.db');
+  },
+  get databaseUrl(): string {
+    return (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim();
   },
   sessionSecret: resolveSessionSecret(),
   geminiApiKey: process.env.GEMINI_API_KEY || '',

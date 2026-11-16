@@ -15,7 +15,7 @@ import { DashboardLayout } from '../components/DashboardLayout';
 import { DropzoneUploader } from '../components/DropzoneUploader';
 import { JobStatusBanner } from '../components/JobStatusBanner';
 import { useAuth } from '../context/AuthContext';
-import { api, type AnalysisDetail, type AnalysisJobStatus } from '../lib/api';
+import { api, resolveApiUrl, type AnalysisDetail, type AnalysisJobStatus } from '../lib/api';
 import { downloadAnalysisSummary } from '../utils/downloadReport';
 
 export function XRayAnalysisPage() {
@@ -110,7 +110,12 @@ export function XRayAnalysisPage() {
         token
       );
 
-      await pollUntilDone(started.analysisId);
+      if (started.status === 'completed') {
+        const detail = await api.getAnalysis(started.analysisId, token);
+        setAnalysis(detail);
+      } else {
+        await pollUntilDone(started.analysisId);
+      }
     } catch (err) {
       setIsUploading(false);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to analyze X-ray image.');
@@ -330,7 +335,7 @@ export function XRayAnalysisPage() {
                 <div className="overflow-auto max-h-[520px] flex items-center justify-center p-4 bg-black">
                   {analysis.file?.signedPreviewUrl ? (
                     <img
-                      src={analysis.file.signedPreviewUrl}
+                      src={resolveApiUrl(analysis.file.signedPreviewUrl)}
                       alt={analysis.title}
                       style={{
                         transform: `scale(${zoom})`,

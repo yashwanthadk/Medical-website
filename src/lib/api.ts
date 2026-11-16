@@ -127,6 +127,36 @@ export interface ChatMessageDTO {
   createdAt: string;
 }
 
+const API_BASE = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  ?.VITE_API_BASE_URL || ''
+).replace(/\/+$/, '');
+
+export function resolveApiUrl(path: string): string {
+  if (!path) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return API_BASE ? `${API_BASE}${normalized}` : normalized;
+}
+
+function buildFriendlyHttpError(status: number, rawBody: string, parsedError?: string): string {
+  if (parsedError && parsedError.trim()) {
+    return parsedError;
+  }
+  if (status === 413) {
+    return 'File is too large for the deployment request limit (4.5 MB max on serverless hosting). Please upload a compressed JPG/PNG or smaller PDF.';
+  }
+  if (status === 404) {
+    return 'Backend API endpoint was not found (404). Verify serverless API deployment and routing.';
+  }
+  if (status === 502 || status === 504) {
+    return 'The analysis server timed out or is temporarily unavailable. Please try again with a clearer/smaller file.';
+  }
+  if (rawBody && !rawBody.trim().startsWith('<')) {
+    return rawBody.trim().slice(0, 220);
+  }
+  return `Request failed with status ${status}`;
+}
+
 async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -140,14 +170,24 @@ async function apiRequest<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const res = await fetch(path, {
+  const res = await fetch(resolveApiUrl(path), {
     ...options,
     headers,
   });
 
-  const data = await res.json().catch(() => ({}));
+  const rawText = await res.text().catch(() => '');
+  let data: Record<string, unknown> = {};
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      data = {};
+    }
+  }
+
   if (!res.ok) {
-    throw new Error(data.error || `Request failed with status ${res.status}`);
+    const errMsg = typeof data.error === 'string' ? data.error : undefined;
+    throw new Error(buildFriendlyHttpError(res.status, rawText, errMsg));
   }
   return data as T;
 }
@@ -232,7 +272,7 @@ export const api = {
   ): Promise<UploadResponse> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/v1/uploads');
+      xhr.open('POST', resolveApiUrl('/api/v1/uploads'));
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
       xhr.upload.onprogress = (evt) => {
@@ -242,15 +282,19 @@ export const api = {
       };
 
       xhr.onload = () => {
+        const rawText = xhr.responseText || '';
+        let parsed: Record<string, unknown> = {};
         try {
-          const parsed = JSON.parse(xhr.responseText || '{}');
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(parsed as UploadResponse);
-          } else {
-            reject(new Error(parsed.error || 'Upload failed.'));
-          }
+          parsed = rawText ? (JSON.parse(rawText) as Record<string, unknown>) : {};
         } catch {
-          reject(new Error('Invalid response from upload server.'));
+          parsed = {};
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(parsed as unknown as UploadResponse);
+        } else {
+          const errMsg = typeof parsed.error === 'string' ? parsed.error : undefined;
+          reject(new Error(buildFriendlyHttpError(xhr.status, rawText, errMsg)));
         }
       };
 

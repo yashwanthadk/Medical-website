@@ -65,17 +65,26 @@ function base64UrlDecode(str: string): string {
 export interface SessionTokenPayload {
   sub: string;
   email: string;
+  displayName?: string;
+  role?: string;
   iat: number;
   exp: number;
 }
 
-export function signSessionToken(userId: string, email: string): string {
+export function signSessionToken(
+  userId: string,
+  email: string,
+  displayName?: string,
+  role = 'patient'
+): string {
   const now = Math.floor(Date.now() / 1000);
   const header = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64UrlEncode(
     JSON.stringify({
       sub: userId,
       email,
+      displayName,
+      role,
       iat: now,
       exp: now + config.sessionTtlSeconds,
     } satisfies SessionTokenPayload)
@@ -136,24 +145,58 @@ export function verifyFileAccessToken(token: string, fileId: string, ownerUserId
 }
 
 export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
-  const db = getDb();
+  const db = await getDb();
 
   // 1. Try local HMAC-signed JWT session token
   const localPayload = verifySessionToken(token);
   if (localPayload) {
-    const row = db
-      .prepare('SELECT id, firebase_uid, email, display_name, role FROM users WHERE id = ?')
-      .get(localPayload.sub) as
-      | { id: string; firebase_uid: string | null; email: string; display_name: string; role: string }
-      | undefined;
-    if (!row) return null;
-    return {
-      id: row.id,
-      email: row.email,
-      displayName: row.display_name,
-      role: row.role,
-      firebaseUid: row.firebase_uid,
-    };
+    const row = await db.queryOne<{
+      id: string;
+      firebase_uid: string | null;
+      email: string;
+      display_name: string;
+      role: string;
+    }>('SELECT id, firebase_uid, email, display_name, role FROM users WHERE id = ?', [
+      localPayload.sub,
+    ]);
+
+    if (row) {
+      return {
+        id: row.id,
+        email: row.email,
+        displayName: row.display_name,
+        role: row.role,
+        firebaseUid: row.firebase_uid,
+      };
+    }
+
+    // In serverless fallback (/tmp) when DATABASE_URL isn't set, auto-hydrate user from verified JWT
+    if (config.isServerless && !config.databaseUrl && localPayload.email) {
+      const now = new Date().toISOString();
+      const displayName = localPayload.displayName || localPayload.email.split('@')[0];
+      await db.execute(
+        `INSERT INTO users (id, firebase_uid, email, display_name, password_hash, role, created_at, updated_at)
+         VALUES (?, NULL, ?, ?, NULL, ?, ?, ?)
+         ON CONFLICT (email) DO NOTHING`,
+        [
+          localPayload.sub,
+          localPayload.email,
+          displayName,
+          localPayload.role || 'patient',
+          now,
+          now,
+        ]
+      );
+      return {
+        id: localPayload.sub,
+        email: localPayload.email,
+        displayName,
+        role: localPayload.role || 'patient',
+        firebaseUid: null,
+      };
+    }
+
+    return null;
   }
 
   // 2. Fallback to verifying Firebase Auth ID Token
@@ -162,19 +205,24 @@ export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
     const email = (decoded.email || '').toLowerCase();
     if (!email) return null;
 
-    const existing = db
-      .prepare('SELECT id, firebase_uid, email, display_name, role FROM users WHERE firebase_uid = ? OR email = ?')
-      .get(decoded.uid, email) as
-      | { id: string; firebase_uid: string | null; email: string; display_name: string; role: string }
-      | undefined;
+    const existing = await db.queryOne<{
+      id: string;
+      firebase_uid: string | null;
+      email: string;
+      display_name: string;
+      role: string;
+    }>('SELECT id, firebase_uid, email, display_name, role FROM users WHERE firebase_uid = ? OR email = ?', [
+      decoded.uid,
+      email,
+    ]);
 
     if (existing) {
       if (!existing.firebase_uid) {
-        db.prepare('UPDATE users SET firebase_uid = ?, updated_at = ? WHERE id = ?').run(
+        await db.execute('UPDATE users SET firebase_uid = ?, updated_at = ? WHERE id = ?', [
           decoded.uid,
           new Date().toISOString(),
-          existing.id
-        );
+          existing.id,
+        ]);
       }
       return {
         id: existing.id,
@@ -188,10 +236,11 @@ export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
     const now = new Date().toISOString();
     const newId = crypto.randomUUID();
     const displayName = decoded.name || email.split('@')[0];
-    db.prepare(
+    await db.execute(
       `INSERT INTO users (id, firebase_uid, email, display_name, password_hash, role, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, 'patient', ?, ?)`
-    ).run(newId, decoded.uid, email, displayName, now, now);
+       VALUES (?, ?, ?, ?, NULL, 'patient', ?, ?)`,
+      [newId, decoded.uid, email, displayName, now, now]
+    );
 
     return {
       id: newId,
@@ -205,25 +254,37 @@ export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
   }
 }
 
+export function asyncHandler(
+  fn: (req: AuthRequest, res: Response, next: NextFunction) => Promise<unknown>
+) {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Authentication required. Please sign in.' });
-    return;
-  }
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Authentication required. Please sign in.' });
+      return;
+    }
 
-  const token = authHeader.slice('Bearer '.length).trim();
-  const user = await resolveAuthUser(token);
-  if (!user) {
-    res.status(401).json({ error: 'Invalid or expired authentication session.' });
-    return;
-  }
+    const token = authHeader.slice('Bearer '.length).trim();
+    const user = await resolveAuthUser(token);
+    if (!user) {
+      res.status(401).json({ error: 'Invalid or expired authentication session.' });
+      return;
+    }
 
-  req.authUser = user;
-  next();
+    req.authUser = user;
+    next();
+  } catch (err) {
+    next(err);
+  }
 };
 
-export function logAudit(params: {
+export async function logAudit(params: {
   userId?: string | null;
   requestId: string;
   action: string;
@@ -231,22 +292,23 @@ export function logAudit(params: {
   resourceId?: string | null;
   statusCode: number;
   ipAddress?: string;
-}): void {
+}): Promise<void> {
   try {
-    const db = getDb();
-    db.prepare(
+    const db = await getDb();
+    await db.execute(
       `INSERT INTO audit_logs (id, user_id, request_id, action, resource_type, resource_id, status_code, ip_address, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      crypto.randomUUID(),
-      params.userId ?? null,
-      params.requestId,
-      params.action,
-      params.resourceType,
-      params.resourceId ?? null,
-      params.statusCode,
-      params.ipAddress ?? '',
-      new Date().toISOString()
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        crypto.randomUUID(),
+        params.userId ?? null,
+        params.requestId,
+        params.action,
+        params.resourceType,
+        params.resourceId ?? null,
+        params.statusCode,
+        params.ipAddress ?? '',
+        new Date().toISOString(),
+      ]
     );
   } catch {
     // Non-blocking audit logging

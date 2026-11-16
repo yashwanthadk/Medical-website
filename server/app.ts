@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express, { type NextFunction, type Response } from 'express';
 import { config } from './core/config.ts';
-import { getDb } from './core/database.ts';
+import { getDb, getPersistenceMode } from './core/database.ts';
 import type { AuthRequest } from './core/security.ts';
 import { authRouter } from './api/auth.ts';
 import { uploadsRouter } from './api/uploads.ts';
@@ -9,18 +9,57 @@ import { analysisRouter } from './api/analysis.ts';
 import { dashboardRouter, historyRouter } from './api/dashboard.ts';
 import { chatRouter } from './api/chat.ts';
 
+function isAllowedOrigin(origin: string): boolean {
+  if (!origin) return false;
+  const configured = [process.env.APP_URL, process.env.CORS_ORIGIN]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .map((v) => v.trim().replace(/\/+$/, ''));
+
+  if (configured.includes(origin)) return true;
+
+  try {
+    const parsed = new URL(origin);
+    if (
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname.endsWith('.vercel.app')
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 export function createApiApp(): express.Express {
   const app = express();
 
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false }));
 
-  // Attach request ID and security headers
+  // Attach request ID, CORS, and security headers
   app.use((req: AuthRequest, res: Response, next: NextFunction) => {
     req.requestId = crypto.randomUUID();
     res.setHeader('X-Request-Id', req.requestId);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+    if (origin && isAllowedOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-Id');
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+
     next();
   });
 
@@ -29,13 +68,15 @@ export function createApiApp(): express.Express {
     res.json({ status: 'ok', service: 'MediExplain AI' });
   });
 
-  app.get('/ready', (_req, res) => {
+  app.get('/ready', async (_req, res) => {
     try {
-      const db = getDb();
-      db.prepare('SELECT 1').get();
+      const db = await getDb();
+      await db.queryOne('SELECT 1 AS ok');
       res.json({
         status: 'ready',
         database: 'connected',
+        persistenceMode: getPersistenceMode(),
+        serverless: config.isServerless,
         aiConfigured: Boolean(
           (process.env.GEMINI_API_KEY || config.geminiApiKey) &&
             (process.env.GEMINI_API_KEY || config.geminiApiKey) !== 'MY_GEMINI_API_KEY'
