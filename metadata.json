@@ -1,0 +1,8 @@
+{
+  "name": "MediExplain AI",
+  "description": "AI-powered medical report, X-ray, MRI scan, and blood test explainer platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

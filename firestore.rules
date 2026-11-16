@@ -1,0 +1,156 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Deny all reads and writes by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMedicalReport(data, userId, reportId) {
+      return data.keys().hasAll(['reportId', 'userId', 'reportType', 'title', 'status', 'urgentFlag', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['reportId', 'userId', 'reportType', 'title', 'status', 'summary', 'urgentFlag', 'createdAt', 'updatedAt'])
+        && data.reportId is string && data.reportId.size() >= 1 && data.reportId.size() <= 128 && data.reportId == reportId
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId == userId
+        && data.reportType is string && data.reportType.size() >= 3 && data.reportType.size() <= 16
+        && data.reportType in ['xray', 'mri', 'blood']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.status is string && data.status.size() >= 4 && data.status.size() <= 16
+        && data.status in ['uploaded', 'queued', 'processing', 'completed', 'failed']
+        && (!('summary' in data) || (data.summary is string && data.summary.size() <= 10000))
+        && data.urgentFlag is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatSession(data, userId, sessionId) {
+      return data.keys().hasAll(['sessionId', 'userId', 'title', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['sessionId', 'userId', 'reportId', 'title', 'createdAt', 'updatedAt'])
+        && data.sessionId is string && data.sessionId.size() >= 1 && data.sessionId.size() <= 128 && data.sessionId == sessionId
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId == userId
+        && (!('reportId' in data) || (data.reportId is string && data.reportId.size() <= 128))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, userId, messageId) {
+      return data.keys().hasAll(['messageId', 'userId', 'role', 'content', 'createdAt'])
+        && data.keys().hasOnly(['messageId', 'userId', 'role', 'content', 'createdAt'])
+        && data.messageId is string && data.messageId.size() >= 1 && data.messageId.size() <= 128 && data.messageId == messageId
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId == userId
+        && data.role is string && data.role.size() >= 4 && data.role.size() <= 16
+        && data.role in ['user', 'assistant']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 12000
+        && data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+      allow delete: if isVerifiedOwner(userId) && isValidId(userId);
+
+      match /reports/{reportId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(reportId);
+        allow list: if isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(reportId)
+          && isValidMedicalReport(incoming(), userId, reportId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(reportId)
+          && isValidMedicalReport(incoming(), userId, reportId)
+          && incoming().userId == existing().userId
+          && incoming().reportId == existing().reportId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && existing().status != 'completed'
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'summary', 'urgentFlag', 'title', 'updatedAt']);
+        allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(reportId);
+      }
+
+      match /chatSessions/{sessionId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(sessionId);
+        allow list: if isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(sessionId)
+          && isValidChatSession(incoming(), userId, sessionId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(sessionId)
+          && isValidChatSession(incoming(), userId, sessionId)
+          && incoming().userId == existing().userId
+          && incoming().sessionId == existing().sessionId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']);
+        allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(sessionId);
+
+        match /messages/{messageId} {
+          allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(sessionId) && isValidId(messageId);
+          allow list: if isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+          allow create: if isVerifiedOwner(userId)
+            && isValidId(userId)
+            && isValidId(sessionId)
+            && isValidId(messageId)
+            && isValidChatMessage(incoming(), userId, messageId)
+            && incoming().createdAt == request.time
+            && exists(/databases/$(database)/documents/users/$(userId)/chatSessions/$(sessionId))
+            && get(/databases/$(database)/documents/users/$(userId)/chatSessions/$(sessionId)).data.userId == userId;
+          allow update: if false;
+          allow delete: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(sessionId) && isValidId(messageId);
+        }
+      }
+    }
+  }
+}

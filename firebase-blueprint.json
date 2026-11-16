@@ -1,0 +1,175 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user account profile for MediExplain AI.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "MedicalReport": {
+      "title": "MedicalReport",
+      "description": "Metadata and structured AI explanation summary for an uploaded scan or blood report.",
+      "type": "object",
+      "properties": {
+        "reportId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reportType": {
+          "type": "string",
+          "enum": ["xray", "mri", "blood"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": ["uploaded", "queued", "processing", "completed", "failed"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 10000
+        },
+        "urgentFlag": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["reportId", "userId", "reportType", "title", "status", "urgentFlag", "createdAt", "updatedAt"]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "Contextual AI medical explanation chat session owned by a user.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reportId": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["sessionId", "userId", "title", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual message inside a user's contextual medical chat session.",
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["messageId", "userId", "role", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile document strictly isolated to the owning Firebase Auth UID."
+    },
+    "/users/{userId}/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/MedicalReport" },
+      "description": "User-scoped medical report analysis summaries."
+    },
+    "/users/{userId}/chatSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ChatSession" },
+      "description": "User-scoped AI medical explanation chat sessions."
+    },
+    "/users/{userId}/chatSessions/{sessionId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages belonging to a user's chat session."
+    }
+  }
+}
