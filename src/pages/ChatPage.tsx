@@ -10,7 +10,6 @@ import {
   Trash2,
 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
-import { useAuth } from '../context/AuthContext';
 import {
   api,
   type ChatMessageDTO,
@@ -25,7 +24,6 @@ const STARTER_PROMPTS = [
 ];
 
 export function ChatPage() {
-  const { token } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeSessionId = searchParams.get('session');
 
@@ -43,12 +41,11 @@ export function ChatPage() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const loadInitial = async () => {
-    if (!token) return;
     setLoadingSessions(true);
     try {
       const [sessRes, histRes] = await Promise.all([
-        api.getChatSessions(token),
-        api.getHistory({}, token),
+        api.getChatSessions(),
+        api.getHistory({}),
       ]);
       setSessions(sessRes.sessions);
       setReports(histRes.items.filter((i) => i.status === 'completed'));
@@ -66,10 +63,10 @@ export function ChatPage() {
   useEffect(() => {
     void loadInitial();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, []);
 
   useEffect(() => {
-    if (!token || !activeSessionId) {
+    if (!activeSessionId) {
       setActiveSession(null);
       setMessages([]);
       return;
@@ -78,7 +75,7 @@ export function ChatPage() {
     setLoadingMessages(true);
     setError(null);
     api
-      .getChatSession(activeSessionId, token)
+      .getChatSession(activeSessionId)
       .then((res) => {
         if (!cancelled) {
           setActiveSession(res.session);
@@ -94,20 +91,16 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, token]);
+  }, [activeSessionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const handleCreateSession = async () => {
-    if (!token) return;
     setError(null);
     try {
-      const created = await api.createChatSession(
-        { reportId: selectedReportId || null },
-        token
-      );
+      const created = await api.createChatSession({ reportId: selectedReportId || null });
       setSessions((prev) => [created, ...prev]);
       setSearchParams({ session: created.id });
     } catch (err) {
@@ -116,9 +109,8 @@ export function ChatPage() {
   };
 
   const handleDeleteSession = async (sessionId: string) => {
-    if (!token) return;
     try {
-      await api.deleteChatSession(sessionId, token);
+      await api.deleteChatSession(sessionId);
       const remaining = sessions.filter((s) => s.id !== sessionId);
       setSessions(remaining);
       if (activeSessionId === sessionId) {
@@ -134,17 +126,14 @@ export function ChatPage() {
   };
 
   const sendMessageText = async (text: string) => {
-    if (!token || !text.trim() || sending) return;
+    if (!text.trim() || sending) return;
 
     let targetSessionId = activeSessionId;
     setError(null);
 
     try {
       if (!targetSessionId) {
-        const created = await api.createChatSession(
-          { reportId: selectedReportId || null },
-          token
-        );
+        const created = await api.createChatSession({ reportId: selectedReportId || null });
         setSessions((prev) => [created, ...prev]);
         targetSessionId = created.id;
         setSearchParams({ session: created.id });
@@ -161,7 +150,7 @@ export function ChatPage() {
       setMessages((prev) => [...prev, optimisticUser]);
       setInput('');
 
-      const res = await api.sendChatMessage(targetSessionId, text.trim(), token);
+      const res = await api.sendChatMessage(targetSessionId, text.trim());
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== optimisticUser.id),
         res.userMessage,

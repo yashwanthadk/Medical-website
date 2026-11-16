@@ -22,9 +22,10 @@ export function PrivacyPage() {
             </h2>
             <p>
               Uploaded X-ray images, MRI scans, and blood test PDFs are validated on our backend
-              server using strict file signature verification and stored in private user-isolated
-              storage. Files are never exposed publicly and are only accessible via authenticated
-              requests or short-lived signed access tokens issued exclusively to the owning account.
+              server using strict file signature verification and stored in private workspace-isolated
+              storage. Files are never exposed publicly and are only accessible via workspace-scoped
+              requests or short-lived signed access tokens issued exclusively for your browser
+              workspace.
             </p>
           </section>
 

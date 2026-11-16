@@ -1,20 +1,18 @@
 import React, { useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import {
   Activity,
   Brain,
   FileText,
   History,
-  KeyRound,
+  Home,
   LayoutDashboard,
-  LogOut,
   Menu,
   MessageSquare,
   ScanLine,
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
 
 interface DashboardLayoutProps {
   title: string;
@@ -29,18 +27,10 @@ const navItems = [
   { to: '/blood-reports', label: 'Blood Report Analysis', icon: Activity },
   { to: '/chat', label: 'AI Medical Chat', icon: MessageSquare },
   { to: '/history', label: 'Analysis History', icon: History },
-  { to: '/reset-password', label: 'Password & Security', icon: KeyRound },
 ];
 
 export function DashboardLayout({ title, subtitle, children }: DashboardLayoutProps) {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
 
   const sidebarContent = (
     <div className="flex h-full flex-col justify-between bg-white border-r border-slate-200">
@@ -88,8 +78,8 @@ export function DashboardLayout({ title, subtitle, children }: DashboardLayoutPr
 
       <div className="border-t border-slate-200 p-4 space-y-3">
         <div className="space-y-0.5 px-1">
-          <p className="text-sm font-semibold text-slate-900 truncate">{user?.displayName}</p>
-          <p className="text-xs text-slate-500 truncate">{user?.email}</p>
+          <p className="text-sm font-semibold text-slate-900 truncate">MediExplain Workspace</p>
+          <p className="text-xs text-slate-500 truncate">Educational AI Report Explainer</p>
         </div>
 
         <div className="flex items-center gap-3 px-1 text-xs text-slate-500">
@@ -102,14 +92,13 @@ export function DashboardLayout({ title, subtitle, children }: DashboardLayoutPr
           </Link>
         </div>
 
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="flex w-full items-center gap-2.5 rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer"
+        <Link
+          to="/"
+          className="flex w-full items-center gap-2.5 rounded-lg border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
         >
-          <LogOut className="h-4 w-4 shrink-0" />
-          <span>Sign Out</span>
-        </button>
+          <Home className="h-4 w-4 shrink-0" />
+          <span>Back to Home</span>
+        </Link>
       </div>
     </div>
   );

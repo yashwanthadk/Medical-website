@@ -146,91 +146,25 @@ test('Health and Readiness endpoints respond properly', async () => {
   assert.equal(readyBody.database, 'connected');
 });
 
-test('Registration, login, forgot password, and new create password flow', async () => {
+test('Removed authentication routes return 404 cleanly', async () => {
   const regRes = await fetch(`${baseUrl}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'patient1@example.com',
-      displayName: 'Alex Morgan',
-      password: 'Password123',
-      confirmPassword: 'Password123',
-    }),
+    body: JSON.stringify({ email: 'test@example.com', password: 'Password123' }),
   });
-  assert.equal(regRes.status, 201);
-  const regData = (await regRes.json()) as { token: string; user: { id: string } };
-  assert.ok(regData.token);
+  assert.equal(regRes.status, 404);
 
   const loginRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'patient1@example.com',
-      password: 'Password123',
-    }),
+    body: JSON.stringify({ email: 'test@example.com', password: 'Password123' }),
   });
-  assert.equal(loginRes.status, 200);
-
-  const forgotRes = await fetch(`${baseUrl}/api/v1/auth/forgot-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'patient1@example.com' }),
-  });
-  assert.equal(forgotRes.status, 200);
-  const forgotData = (await forgotRes.json()) as { verificationCode: string };
-  assert.equal(forgotData.verificationCode.length, 6);
-
-  const resetRes = await fetch(`${baseUrl}/api/v1/auth/reset-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'patient1@example.com',
-      code: forgotData.verificationCode,
-      newPassword: 'NewPassword456',
-      confirmPassword: 'NewPassword456',
-    }),
-  });
-  assert.equal(resetRes.status, 200);
-
-  const oldLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'patient1@example.com', password: 'Password123' }),
-  });
-  assert.equal(oldLogin.status, 401);
-
-  const newLogin = await fetch(`${baseUrl}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'patient1@example.com', password: 'NewPassword456' }),
-  });
-  assert.equal(newLogin.status, 200);
+  assert.equal(loginRes.status, 404);
 });
 
-test('Upload validation, DB binary fallback, strict user isolation, analysis & chat', async () => {
-  const userARes = await fetch(`${baseUrl}/api/v1/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'usera@example.com',
-      displayName: 'User A',
-      password: 'Password123',
-      confirmPassword: 'Password123',
-    }),
-  });
-  const userA = (await userARes.json()) as { token: string; user: { id: string } };
-
-  const userBRes = await fetch(`${baseUrl}/api/v1/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'userb@example.com',
-      displayName: 'User B',
-      password: 'Password123',
-      confirmPassword: 'Password123',
-    }),
-  });
-  const userB = (await userBRes.json()) as { token: string };
+test('Login-free upload validation, DB binary fallback, workspace isolation, analysis & chat', async () => {
+  const workspaceA = 'workspace-alpha-1234';
+  const workspaceB = 'workspace-beta-5678';
 
   // Spoofed PNG upload (invalid magic bytes)
   const badForm = new FormData();
@@ -238,46 +172,46 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
   badForm.append('file', new Blob(['NOT_A_PNG_FILE'], { type: 'image/png' }), 'fake.png');
   const badUpload = await fetch(`${baseUrl}/api/v1/uploads`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${userA.token}` },
+    headers: { 'X-Workspace-Id': workspaceA },
     body: badForm,
   });
   assert.equal(badUpload.status, 400);
 
-  // Valid PNG upload for Blood Report
+  // Valid PNG upload for Blood Report without login
   const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00]);
   const goodForm = new FormData();
   goodForm.append('category', 'blood');
   goodForm.append('file', new Blob([pngHeader], { type: 'image/png' }), 'lab_panel.png');
   const goodUpload = await fetch(`${baseUrl}/api/v1/uploads`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${userA.token}` },
+    headers: { 'X-Workspace-Id': workspaceA },
     body: goodForm,
   });
   assert.equal(goodUpload.status, 201);
   const uploadData = (await goodUpload.json()) as { fileId: string; signedPreviewUrl: string };
 
   // Simulate ephemeral serverless filesystem wipe: remove disk copy, verify DB file_data serves preview
-  const userDiskDir = path.join(config.privateStorageDir, userA.user.id);
-  if (fs.existsSync(userDiskDir)) {
-    fs.rmSync(userDiskDir, { recursive: true, force: true });
+  const workspaceDiskDir = path.join(config.privateStorageDir, workspaceA);
+  if (fs.existsSync(workspaceDiskDir)) {
+    fs.rmSync(workspaceDiskDir, { recursive: true, force: true });
   }
   const previewRes = await fetch(`${baseUrl}${uploadData.signedPreviewUrl}`);
   assert.equal(previewRes.status, 200);
   const previewBuf = Buffer.from(await previewRes.arrayBuffer());
   assert.deepEqual(previewBuf, pngHeader);
 
-  // User B cannot access User A's file
+  // Workspace B cannot access Workspace A's file without signed token
   const crossFile = await fetch(`${baseUrl}/api/v1/uploads/${uploadData.fileId}`, {
-    headers: { Authorization: `Bearer ${userB.token}` },
+    headers: { 'X-Workspace-Id': workspaceB },
   });
   assert.equal(crossFile.status, 403);
 
-  // Trigger Blood Analysis for User A (uses DB file_data fallback since disk copy was wiped)
+  // Trigger Blood Analysis for Workspace A (uses DB file_data fallback since disk copy was wiped)
   const triggerRes = await fetch(`${baseUrl}/api/v1/analysis/blood`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${userA.token}`,
+      'X-Workspace-Id': workspaceA,
     },
     body: JSON.stringify({ fileId: uploadData.fileId, title: 'Annual Blood Panel' }),
   });
@@ -290,7 +224,7 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
   let status = 'queued';
   for (let i = 0; i < 25; i++) {
     const statusRes = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}/status`, {
-      headers: { Authorization: `Bearer ${userA.token}` },
+      headers: { 'X-Workspace-Id': workspaceA },
     });
     const statusBody = (await statusRes.json()) as { status: string };
     status = statusBody.status;
@@ -300,7 +234,7 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
   assert.equal(status, 'completed');
 
   const analysisRes = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}`, {
-    headers: { Authorization: `Bearer ${userA.token}` },
+    headers: { 'X-Workspace-Id': workspaceA },
   });
   assert.equal(analysisRes.status, 200);
   const analysisBody = (await analysisRes.json()) as {
@@ -309,18 +243,26 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
   assert.equal(analysisBody.bloodResults.length, 2);
   assert.equal(analysisBody.bloodResults[1].status, 'High');
 
-  // Dashboard summary & History endpoints
+  // Dashboard summary & History endpoints without auth
   const dashRes = await fetch(`${baseUrl}/api/v1/dashboard/summary`, {
-    headers: { Authorization: `Bearer ${userA.token}` },
+    headers: { 'X-Workspace-Id': workspaceA },
   });
   assert.equal(dashRes.status, 200);
   const dashBody = (await dashRes.json()) as { metrics: { totalReports: number; bloodCount: number } };
   assert.equal(dashBody.metrics.totalReports, 1);
   assert.equal(dashBody.metrics.bloodCount, 1);
 
-  // Verify User B isolation
+  const histRes = await fetch(`${baseUrl}/api/v1/history?type=blood`, {
+    headers: { 'X-Workspace-Id': workspaceA },
+  });
+  assert.equal(histRes.status, 200);
+  const histBody = (await histRes.json()) as { items: Array<{ reportId: string }> };
+  assert.equal(histBody.items.length, 1);
+  assert.equal(histBody.items[0].reportId, reportId);
+
+  // Verify Workspace B isolation
   const crossAnalysis = await fetch(`${baseUrl}/api/v1/analysis/${analysisId}`, {
-    headers: { Authorization: `Bearer ${userB.token}` },
+    headers: { 'X-Workspace-Id': workspaceB },
   });
   assert.equal(crossAnalysis.status, 403);
 
@@ -328,17 +270,18 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${userB.token}`,
+      'X-Workspace-Id': workspaceB,
     },
     body: JSON.stringify({ reportId }),
   });
   assert.equal(crossChat.status, 403);
 
+  // Chat works directly without auth
   const chatRes = await fetch(`${baseUrl}/api/v1/chat/sessions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${userA.token}`,
+      'X-Workspace-Id': workspaceA,
     },
     body: JSON.stringify({ reportId }),
   });
@@ -349,7 +292,7 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${userA.token}`,
+      'X-Workspace-Id': workspaceA,
     },
     body: JSON.stringify({ message: 'What does Fasting Glucose mean?' }),
   });
@@ -358,7 +301,7 @@ test('Upload validation, DB binary fallback, strict user isolation, analysis & c
   assert.match(msgBody.assistantMessage.content, /attached report/);
 });
 
-test('Vercel serverless entrypoint handles rewritten API paths and query parameters cleanly', async () => {
+test('Vercel serverless entrypoint handles rewritten API paths without authentication', async () => {
   const healthRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/health`);
   assert.equal(healthRes.status, 200);
   const healthJson = (await healthRes.json()) as { status: string };
@@ -369,27 +312,20 @@ test('Vercel serverless entrypoint handles rewritten API paths and query paramet
   const readyJson = (await readyRes.json()) as { database: string };
   assert.equal(readyJson.database, 'connected');
 
-  const regRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/api/v1/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: 'verceluser@example.com',
-      displayName: 'Vercel Patient',
-      password: 'Password123',
-      confirmPassword: 'Password123',
-    }),
-  });
-  assert.equal(regRes.status, 201);
-  const regBody = (await regRes.json()) as { token: string; user: { email: string } };
-  assert.equal(regBody.user.email, 'verceluser@example.com');
+  const dashRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/api/v1/dashboard/summary`);
+  assert.equal(dashRes.status, 200);
+  const dashBody = (await dashRes.json()) as { metrics: { totalReports: number } };
+  assert.equal(typeof dashBody.metrics.totalReports, 'number');
 
-  const historyRes = await fetch(
-    `${vercelBaseUrl}/api/index?__vercel_path=/api/v1/history&type=blood`,
-    {
-      headers: { Authorization: `Bearer ${regBody.token}` },
-    }
-  );
+  const historyRes = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/api/v1/history&type=blood`);
   assert.equal(historyRes.status, 200);
   const historyBody = (await historyRes.json()) as { items: unknown[] };
   assert.ok(Array.isArray(historyBody.items));
+
+  const authGone = await fetch(`${vercelBaseUrl}/api/index?__vercel_path=/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'a@b.com', password: 'pw' }),
+  });
+  assert.equal(authGone.status, 404);
 });

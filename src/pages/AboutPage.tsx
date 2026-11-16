@@ -73,10 +73,10 @@ export function AboutPage() {
           </ul>
           <div className="pt-2">
             <Link
-              to="/signup"
+              to="/dashboard"
               className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 transition-colors"
             >
-              <span>Create Your Account</span>
+              <span>Start Analyzing Reports</span>
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>

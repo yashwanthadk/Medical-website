@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import { PublicHeader } from '../components/PublicHeader';
 import { PublicFooter } from '../components/PublicFooter';
-import { useAuth } from '../context/AuthContext';
 
 const workflowSteps = [
   {
@@ -42,8 +41,6 @@ const workflowSteps = [
 ];
 
 export function HomePage() {
-  const { user } = useAuth();
-
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <PublicHeader />
@@ -72,17 +69,17 @@ export function HomePage() {
 
                 <div className="flex flex-wrap items-center gap-4 pt-2">
                   <Link
-                    to={user ? '/dashboard' : '/signup'}
+                    to="/dashboard"
                     className="inline-flex items-center gap-2 rounded-lg bg-sky-700 px-6 py-3.5 text-sm font-semibold text-white hover:bg-sky-800 transition-colors whitespace-nowrap"
                   >
                     <span>Get Started</span>
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                   <Link
-                    to={user ? '/chat' : '/login'}
+                    to="/chat"
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-3.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap"
                   >
-                    <span>{user ? 'Open AI Medical Chat' : 'Sign In to Account'}</span>
+                    <span>Open AI Medical Chat</span>
                   </Link>
                 </div>
 
@@ -162,7 +159,7 @@ export function HomePage() {
                   </p>
                 </div>
                 <Link
-                  to={user ? '/xray' : '/signup'}
+                  to="/xray"
                   className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700 hover:text-sky-900"
                 >
                   <span>Analyze an X-Ray</span>
@@ -196,7 +193,7 @@ export function HomePage() {
                   </p>
                 </div>
                 <Link
-                  to={user ? '/mri' : '/signup'}
+                  to="/mri"
                   className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700 hover:text-sky-900"
                 >
                   <span>Explore an MRI Scan</span>
@@ -230,7 +227,7 @@ export function HomePage() {
                   </p>
                 </div>
                 <Link
-                  to={user ? '/blood-reports' : '/signup'}
+                  to="/blood-reports"
                   className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700 hover:text-sky-900"
                 >
                   <span>Explain a Blood Report</span>
@@ -326,10 +323,10 @@ export function HomePage() {
               <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-2">
                 <Lock className="h-5 w-5 text-sky-700" />
                 <h3 className="font-display text-base font-bold text-slate-900">
-                  Private &amp; User-Scoped
+                  Private &amp; Workspace-Scoped
                 </h3>
                 <p className="text-sm text-slate-600">
-                  Files are stored privately behind authenticated access tokens with full deletion
+                  Files are stored privately behind workspace-scoped access tokens with full deletion
                   control and zero model training without consent.
                 </p>
               </div>
@@ -342,8 +339,8 @@ export function HomePage() {
                 Ready to understand your scans and lab results?
               </h2>
               <p className="text-sm text-slate-600">
-                Create your private account in under a minute and upload your first X-ray, MRI
-                scan, or blood test report.
+                Open the workspace directly with no account required and upload your first X-ray,
+                MRI scan, or blood test report.
               </p>
               <ul className="flex flex-wrap gap-x-5 gap-y-1 pt-1 text-xs text-slate-600">
                 <li className="inline-flex items-center gap-1.5">
@@ -362,10 +359,10 @@ export function HomePage() {
             </div>
 
             <Link
-              to={user ? '/dashboard' : '/signup'}
+              to="/dashboard"
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-700 px-6 py-3.5 text-sm font-semibold text-white hover:bg-sky-800 transition-colors whitespace-nowrap shrink-0"
             >
-              <span>{user ? 'Go to Dashboard' : 'Get Started Free'}</span>
+              <span>Get Started Free</span>
               <ArrowRight className="h-4 w-4" />
             </Link>
           </div>

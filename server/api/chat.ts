@@ -4,9 +4,9 @@ import { getDb } from '../core/database.ts';
 import {
   asyncHandler,
   createRateLimiter,
+  DEFAULT_WORKSPACE_ID,
   logAudit,
-  requireAuth,
-  type AuthRequest,
+  type WorkspaceRequest,
 } from '../core/security.ts';
 import { getAIProvider } from '../services/aiService.ts';
 
@@ -16,9 +16,8 @@ const chatLimiter = createRateLimiter(60_000, 30);
 // POST /api/v1/chat/sessions
 chatRouter.post(
   '/sessions',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const { reportId, title } = req.body ?? {};
     const db = await getDb();
 
@@ -39,7 +38,7 @@ chatRouter.post(
         res.status(404).json({ error: 'Selected medical report was not found.' });
         return;
       }
-      if (report.user_id !== userId) {
+      if (report.user_id !== workspaceId) {
         res.status(403).json({ error: 'Forbidden: you do not have access to this report.' });
         return;
       }
@@ -55,11 +54,11 @@ chatRouter.post(
     await db.execute(
       `INSERT INTO chat_sessions (id, user_id, report_id, title, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [sessionId, userId, linkedReportId, cleanTitle, now, now]
+      [sessionId, workspaceId, linkedReportId, cleanTitle, now, now]
     );
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: 'CHAT_SESSION_CREATED',
       resourceType: 'chat_session',
@@ -81,9 +80,8 @@ chatRouter.post(
 // GET /api/v1/chat/sessions
 chatRouter.get(
   '/sessions',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const db = await getDb();
 
     const rows = await db.queryAll(
@@ -93,7 +91,7 @@ chatRouter.get(
        LEFT JOIN medical_reports r ON r.id = s.report_id
        WHERE s.user_id = ?
        ORDER BY s.updated_at DESC`,
-      [userId]
+      [workspaceId]
     );
 
     res.json({ sessions: rows });
@@ -103,9 +101,8 @@ chatRouter.get(
 // GET /api/v1/chat/sessions/:sessionId
 chatRouter.get(
   '/sessions/:sessionId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const sessionId = String(req.params.sessionId || '');
     const db = await getDb();
 
@@ -131,7 +128,7 @@ chatRouter.get(
       res.status(404).json({ error: 'Chat session not found.' });
       return;
     }
-    if (session.user_id !== userId) {
+    if (session.user_id !== workspaceId) {
       res.status(403).json({ error: 'Forbidden: you do not have access to this chat session.' });
       return;
     }
@@ -141,7 +138,7 @@ chatRouter.get(
        FROM chat_messages
        WHERE session_id = ? AND user_id = ?
        ORDER BY created_at ASC`,
-      [sessionId, userId]
+      [sessionId, workspaceId]
     );
 
     res.json({
@@ -162,10 +159,9 @@ chatRouter.get(
 // POST /api/v1/chat/sessions/:sessionId/messages
 chatRouter.post(
   '/sessions/:sessionId/messages',
-  requireAuth,
   chatLimiter,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const sessionId = String(req.params.sessionId || '');
     const { message } = req.body ?? {};
 
@@ -186,7 +182,7 @@ chatRouter.post(
       res.status(404).json({ error: 'Chat session not found.' });
       return;
     }
-    if (session.user_id !== userId) {
+    if (session.user_id !== workspaceId) {
       res.status(403).json({ error: 'Forbidden: you do not have access to this chat session.' });
       return;
     }
@@ -205,7 +201,7 @@ chatRouter.post(
          FROM medical_reports r
          LEFT JOIN analyses a ON a.report_id = r.id
          WHERE r.id = ? AND r.user_id = ?`,
-        [session.report_id, userId]
+        [session.report_id, workspaceId]
       );
 
       if (reportData) {
@@ -221,7 +217,7 @@ chatRouter.post(
                 `SELECT test_name, measured_value, unit, reference_range, status
                  FROM blood_test_results WHERE report_id = ? AND user_id = ?
                  ORDER BY sort_order ASC, id ASC`,
-                [session.report_id, userId]
+                [session.report_id, workspaceId]
               )
             : [];
 
@@ -252,7 +248,7 @@ chatRouter.post(
       `SELECT role, content FROM chat_messages
        WHERE session_id = ? AND user_id = ?
        ORDER BY created_at ASC`,
-      [sessionId, userId]
+      [sessionId, workspaceId]
     );
 
     const userMsgId = crypto.randomUUID();
@@ -260,7 +256,7 @@ chatRouter.post(
     await db.execute(
       `INSERT INTO chat_messages (id, session_id, user_id, role, content, created_at)
        VALUES (?, ?, ?, 'user', ?, ?)`,
-      [userMsgId, sessionId, userId, cleanMessage, userMsgTime]
+      [userMsgId, sessionId, workspaceId, cleanMessage, userMsgTime]
     );
 
     try {
@@ -276,7 +272,7 @@ chatRouter.post(
       await db.execute(
         `INSERT INTO chat_messages (id, session_id, user_id, role, content, created_at)
          VALUES (?, ?, ?, 'assistant', ?, ?)`,
-        [assistantMsgId, sessionId, userId, reply, assistantMsgTime]
+        [assistantMsgId, sessionId, workspaceId, reply, assistantMsgTime]
       );
 
       await db.execute('UPDATE chat_sessions SET updated_at = ? WHERE id = ?', [
@@ -311,9 +307,8 @@ chatRouter.post(
 // DELETE /api/v1/chat/sessions/:sessionId
 chatRouter.delete(
   '/sessions/:sessionId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const sessionId = String(req.params.sessionId || '');
     const db = await getDb();
 
@@ -326,15 +321,18 @@ chatRouter.delete(
       res.status(404).json({ error: 'Chat session not found.' });
       return;
     }
-    if (session.user_id !== userId) {
-      res.status(403).json({ error: 'Forbidden: you cannot delete another user’s chat session.' });
+    if (session.user_id !== workspaceId) {
+      res.status(403).json({ error: 'Forbidden: you cannot delete another workspace’s chat session.' });
       return;
     }
 
-    await db.execute('DELETE FROM chat_sessions WHERE id = ? AND user_id = ?', [sessionId, userId]);
+    await db.execute('DELETE FROM chat_sessions WHERE id = ? AND user_id = ?', [
+      sessionId,
+      workspaceId,
+    ]);
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: 'CHAT_SESSION_DELETED',
       resourceType: 'chat_session',

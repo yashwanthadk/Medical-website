@@ -10,11 +10,9 @@ import {
   Trash2,
 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
-import { useAuth } from '../context/AuthContext';
 import { api, type HistoryItem } from '../lib/api';
 
 export function HistoryPage() {
-  const { token } = useAuth();
   const navigate = useNavigate();
 
   const [items, setItems] = useState<HistoryItem[]>([]);
@@ -25,11 +23,10 @@ export function HistoryPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadHistory = async () => {
-    if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getHistory({ type: typeFilter, q: searchQuery }, token);
+      const res = await api.getHistory({ type: typeFilter, q: searchQuery });
       setItems(res.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load analysis history.');
@@ -41,7 +38,7 @@ export function HistoryPage() {
   useEffect(() => {
     void loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, typeFilter]);
+  }, [typeFilter]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,10 +46,9 @@ export function HistoryPage() {
   };
 
   const handleDelete = async (reportId: string) => {
-    if (!token) return;
     setDeletingId(reportId);
     try {
-      await api.deleteReport(reportId, token);
+      await api.deleteReport(reportId);
       setItems((prev) => prev.filter((item) => item.reportId !== reportId));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete report.');
@@ -62,9 +58,8 @@ export function HistoryPage() {
   };
 
   const handleStartChat = async (reportId: string) => {
-    if (!token) return;
     try {
-      const session = await api.createChatSession({ reportId }, token);
+      const session = await api.createChatSession({ reportId });
       navigate(`/chat?session=${session.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open chat session.');

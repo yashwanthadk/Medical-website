@@ -1,12 +1,3 @@
-export interface UserDTO {
-  id: string;
-  email: string;
-  displayName: string;
-  role: string;
-  hasPassword: boolean;
-  createdAt?: string;
-}
-
 export interface UploadResponse {
   fileId: string;
   originalFilename: string;
@@ -131,6 +122,25 @@ const API_BASE = ((import.meta as unknown as { env?: Record<string, string | und
   ?.VITE_API_BASE_URL || ''
 ).replace(/\/+$/, '');
 
+const WORKSPACE_STORAGE_KEY = 'mediexplain_workspace_id';
+
+export function getWorkspaceId(): string {
+  try {
+    let existing = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) {
+      return existing;
+    }
+    const generated =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return 'public-workspace';
+  }
+}
+
 export function resolveApiUrl(path: string): string {
   if (!path) return path;
   if (/^https?:\/\//i.test(path)) return path;
@@ -157,18 +167,12 @@ function buildFriendlyHttpError(status: number, rawBody: string, parsedError?: s
   return `Request failed with status ${status}`;
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  token?: string | null
-): Promise<T> {
+async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
+  headers.set('X-Workspace-Id', getWorkspaceId());
 
   const res = await fetch(resolveApiUrl(path), {
     ...options,
@@ -193,87 +197,15 @@ async function apiRequest<T>(
 }
 
 export const api = {
-  register(payload: {
-    email: string;
-    displayName: string;
-    password: string;
-    confirmPassword: string;
-  }) {
-    return apiRequest<{ token: string; user: UserDTO }>('/api/v1/auth/register', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  },
-
-  login(payload: { email: string; password: string }) {
-    return apiRequest<{ token: string; user: UserDTO }>('/api/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  },
-
-  exchangeFirebaseToken(idToken: string) {
-    return apiRequest<{ token: string; user: UserDTO }>('/api/v1/auth/firebase', {
-      method: 'POST',
-      body: JSON.stringify({ idToken }),
-    });
-  },
-
-  forgotPassword(email: string) {
-    return apiRequest<{
-      message: string;
-      verificationCode?: string;
-      expiresInMinutes: number;
-    }>('/api/v1/auth/forgot-password', {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    });
-  },
-
-  resetPassword(payload: {
-    email: string;
-    code: string;
-    newPassword: string;
-    confirmPassword: string;
-  }) {
-    return apiRequest<{ message: string }>('/api/v1/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  },
-
-  changePassword(
-    payload: { currentPassword?: string; newPassword: string; confirmPassword: string },
-    token: string
-  ) {
-    return apiRequest<{ message: string }>(
-      '/api/v1/auth/change-password',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      },
-      token
-    );
-  },
-
-  getMe(token: string) {
-    return apiRequest<{ user: UserDTO }>('/api/v1/auth/me', {}, token);
-  },
-
-  logout(token: string | null) {
-    return apiRequest<{ message: string }>('/api/v1/auth/logout', { method: 'POST' }, token);
-  },
-
   uploadFile(
     file: File,
     category: 'xray' | 'mri' | 'blood',
-    token: string,
     onProgress?: (percent: number) => void
   ): Promise<UploadResponse> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', resolveApiUrl('/api/v1/uploads'));
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('X-Workspace-Id', getWorkspaceId());
 
       xhr.upload.onprogress = (evt) => {
         if (evt.lengthComputable && onProgress) {
@@ -309,102 +241,79 @@ export const api = {
 
   startAnalysis(
     type: 'xray' | 'mri' | 'blood',
-    payload: { fileId: string; title?: string; clinicalNotes?: string },
-    token: string
+    payload: { fileId: string; title?: string; clinicalNotes?: string }
   ) {
     return apiRequest<{
       reportId: string;
       analysisId: string;
       jobId: string;
       status: string;
-    }>(
-      `/api/v1/analysis/${type}`,
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      },
-      token
-    );
+    }>(`/api/v1/analysis/${type}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
-  getAnalysisStatus(analysisId: string, token: string) {
-    return apiRequest<AnalysisJobStatus>(`/api/v1/analysis/${analysisId}/status`, {}, token);
+  getAnalysisStatus(analysisId: string) {
+    return apiRequest<AnalysisJobStatus>(`/api/v1/analysis/${analysisId}/status`);
   },
 
-  getAnalysis(analysisId: string, token: string) {
-    return apiRequest<AnalysisDetail>(`/api/v1/analysis/${analysisId}`, {}, token);
+  getAnalysis(analysisId: string) {
+    return apiRequest<AnalysisDetail>(`/api/v1/analysis/${analysisId}`);
   },
 
-  getDashboardSummary(token: string) {
-    return apiRequest<DashboardSummary>('/api/v1/dashboard/summary', {}, token);
+  getDashboardSummary() {
+    return apiRequest<DashboardSummary>('/api/v1/dashboard/summary');
   },
 
-  getHistory(params: { type?: string; q?: string }, token: string) {
+  getHistory(params: { type?: string; q?: string }) {
     const search = new URLSearchParams();
     if (params.type && params.type !== 'all') search.set('type', params.type);
     if (params.q) search.set('q', params.q);
     const qs = search.toString();
-    return apiRequest<{ items: HistoryItem[] }>(
-      `/api/v1/history${qs ? `?${qs}` : ''}`,
-      {},
-      token
-    );
+    return apiRequest<{ items: HistoryItem[] }>(`/api/v1/history${qs ? `?${qs}` : ''}`);
   },
 
-  getReportDetail(reportId: string, token: string) {
-    return apiRequest<AnalysisDetail>(`/api/v1/history/${reportId}`, {}, token);
+  getReportDetail(reportId: string) {
+    return apiRequest<AnalysisDetail>(`/api/v1/history/${reportId}`);
   },
 
-  deleteReport(reportId: string, token: string) {
-    return apiRequest<{ message: string }>(
-      `/api/v1/history/${reportId}`,
-      { method: 'DELETE' },
-      token
-    );
+  deleteReport(reportId: string) {
+    return apiRequest<{ message: string }>(`/api/v1/history/${reportId}`, {
+      method: 'DELETE',
+    });
   },
 
-  createChatSession(payload: { reportId?: string | null; title?: string }, token: string) {
-    return apiRequest<ChatSessionDTO>(
-      '/api/v1/chat/sessions',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      },
-      token
-    );
+  createChatSession(payload: { reportId?: string | null; title?: string }) {
+    return apiRequest<ChatSessionDTO>('/api/v1/chat/sessions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
-  getChatSessions(token: string) {
-    return apiRequest<{ sessions: ChatSessionDTO[] }>('/api/v1/chat/sessions', {}, token);
+  getChatSessions() {
+    return apiRequest<{ sessions: ChatSessionDTO[] }>('/api/v1/chat/sessions');
   },
 
-  getChatSession(sessionId: string, token: string) {
+  getChatSession(sessionId: string) {
     return apiRequest<{ session: ChatSessionDTO; messages: ChatMessageDTO[] }>(
-      `/api/v1/chat/sessions/${sessionId}`,
-      {},
-      token
+      `/api/v1/chat/sessions/${sessionId}`
     );
   },
 
-  sendChatMessage(sessionId: string, message: string, token: string) {
+  sendChatMessage(sessionId: string, message: string) {
     return apiRequest<{
       userMessage: ChatMessageDTO;
       assistantMessage: ChatMessageDTO;
-    }>(
-      `/api/v1/chat/sessions/${sessionId}/messages`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ message }),
-      },
-      token
-    );
+    }>(`/api/v1/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
   },
 
-  deleteChatSession(sessionId: string, token: string) {
-    return apiRequest<{ message: string }>(
-      `/api/v1/chat/sessions/${sessionId}`,
-      { method: 'DELETE' },
-      token
-    );
+  deleteChatSession(sessionId: string) {
+    return apiRequest<{ message: string }>(`/api/v1/chat/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
   },
 };

@@ -14,12 +14,10 @@ import {
 import { DashboardLayout } from '../components/DashboardLayout';
 import { DropzoneUploader } from '../components/DropzoneUploader';
 import { JobStatusBanner } from '../components/JobStatusBanner';
-import { useAuth } from '../context/AuthContext';
 import { api, resolveApiUrl, type AnalysisDetail, type AnalysisJobStatus } from '../lib/api';
 import { downloadAnalysisSummary } from '../utils/downloadReport';
 
 export function XRayAnalysisPage() {
-  const { token } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const reportIdParam = searchParams.get('reportId');
@@ -42,12 +40,12 @@ export function XRayAnalysisPage() {
   const [openingChat, setOpeningChat] = useState(false);
 
   useEffect(() => {
-    if (!reportIdParam || !token) return;
+    if (!reportIdParam) return;
     let cancelled = false;
     setLoadingExisting(true);
     setErrorMessage(null);
     api
-      .getReportDetail(reportIdParam, token)
+      .getReportDetail(reportIdParam)
       .then((detail) => {
         if (!cancelled && detail.reportType === 'xray') {
           setAnalysis(detail);
@@ -62,15 +60,14 @@ export function XRayAnalysisPage() {
     return () => {
       cancelled = true;
     };
-  }, [reportIdParam, token]);
+  }, [reportIdParam]);
 
   const pollUntilDone = async (analysisId: string) => {
-    if (!token) return;
     for (let i = 0; i < 60; i++) {
-      const st = await api.getAnalysisStatus(analysisId, token);
+      const st = await api.getAnalysisStatus(analysisId);
       setJobStatus(st);
       if (st.status === 'completed') {
-        const detail = await api.getAnalysis(analysisId, token);
+        const detail = await api.getAnalysis(analysisId);
         setAnalysis(detail);
         return;
       }
@@ -84,7 +81,7 @@ export function XRayAnalysisPage() {
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !token) return;
+    if (!selectedFile) return;
 
     setErrorMessage(null);
     setDuplicateWarning(false);
@@ -94,24 +91,20 @@ export function XRayAnalysisPage() {
     setUploadProgress(0);
 
     try {
-      const uploaded = await api.uploadFile(selectedFile, 'xray', token, (pct) => {
+      const uploaded = await api.uploadFile(selectedFile, 'xray', (pct) => {
         setUploadProgress(pct);
       });
       setDuplicateWarning(uploaded.isDuplicate);
       setIsUploading(false);
 
-      const started = await api.startAnalysis(
-        'xray',
-        {
-          fileId: uploaded.fileId,
-          title: title.trim() || selectedFile.name,
-          clinicalNotes: clinicalNotes.trim(),
-        },
-        token
-      );
+      const started = await api.startAnalysis('xray', {
+        fileId: uploaded.fileId,
+        title: title.trim() || selectedFile.name,
+        clinicalNotes: clinicalNotes.trim(),
+      });
 
       if (started.status === 'completed') {
-        const detail = await api.getAnalysis(started.analysisId, token);
+        const detail = await api.getAnalysis(started.analysisId);
         setAnalysis(detail);
       } else {
         await pollUntilDone(started.analysisId);
@@ -123,10 +116,10 @@ export function XRayAnalysisPage() {
   };
 
   const handleOpenChat = async () => {
-    if (!analysis || !token) return;
+    if (!analysis) return;
     setOpeningChat(true);
     try {
-      const session = await api.createChatSession({ reportId: analysis.reportId }, token);
+      const session = await api.createChatSession({ reportId: analysis.reportId });
       navigate(`/chat?session=${session.id}`);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Could not start AI chat session.');

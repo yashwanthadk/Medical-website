@@ -30,7 +30,6 @@ import {
 import { DashboardLayout } from '../components/DashboardLayout';
 import { DropzoneUploader } from '../components/DropzoneUploader';
 import { JobStatusBanner } from '../components/JobStatusBanner';
-import { useAuth } from '../context/AuthContext';
 import {
   api,
   resolveApiUrl,
@@ -64,7 +63,6 @@ const STATUS_STYLE: Record<string, { color: string; bg: string; icon: React.Reac
 };
 
 export function BloodReportPage() {
-  const { token } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const reportIdParam = searchParams.get('reportId');
@@ -87,11 +85,11 @@ export function BloodReportPage() {
   const [openingChat, setOpeningChat] = useState(false);
 
   useEffect(() => {
-    if (!reportIdParam || !token) return;
+    if (!reportIdParam) return;
     let cancelled = false;
     setLoadingExisting(true);
     api
-      .getReportDetail(reportIdParam, token)
+      .getReportDetail(reportIdParam)
       .then((detail) => {
         if (!cancelled && detail.reportType === 'blood') {
           setAnalysis(detail);
@@ -106,15 +104,14 @@ export function BloodReportPage() {
     return () => {
       cancelled = true;
     };
-  }, [reportIdParam, token]);
+  }, [reportIdParam]);
 
   const pollUntilDone = async (analysisId: string) => {
-    if (!token) return;
     for (let i = 0; i < 65; i++) {
-      const st = await api.getAnalysisStatus(analysisId, token);
+      const st = await api.getAnalysisStatus(analysisId);
       setJobStatus(st);
       if (st.status === 'completed') {
-        const detail = await api.getAnalysis(analysisId, token);
+        const detail = await api.getAnalysis(analysisId);
         setAnalysis(detail);
         return;
       }
@@ -128,7 +125,7 @@ export function BloodReportPage() {
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !token) return;
+    if (!selectedFile) return;
 
     setErrorMessage(null);
     setDuplicateWarning(false);
@@ -138,24 +135,20 @@ export function BloodReportPage() {
     setUploadProgress(0);
 
     try {
-      const uploaded = await api.uploadFile(selectedFile, 'blood', token, (pct) => {
+      const uploaded = await api.uploadFile(selectedFile, 'blood', (pct) => {
         setUploadProgress(pct);
       });
       setDuplicateWarning(uploaded.isDuplicate);
       setIsUploading(false);
 
-      const started = await api.startAnalysis(
-        'blood',
-        {
-          fileId: uploaded.fileId,
-          title: title.trim() || selectedFile.name,
-          clinicalNotes: clinicalNotes.trim(),
-        },
-        token
-      );
+      const started = await api.startAnalysis('blood', {
+        fileId: uploaded.fileId,
+        title: title.trim() || selectedFile.name,
+        clinicalNotes: clinicalNotes.trim(),
+      });
 
       if (started.status === 'completed') {
-        const detail = await api.getAnalysis(started.analysisId, token);
+        const detail = await api.getAnalysis(started.analysisId);
         setAnalysis(detail);
       } else {
         await pollUntilDone(started.analysisId);
@@ -167,10 +160,10 @@ export function BloodReportPage() {
   };
 
   const handleOpenChat = async () => {
-    if (!analysis || !token) return;
+    if (!analysis) return;
     setOpeningChat(true);
     try {
-      const session = await api.createChatSession({ reportId: analysis.reportId }, token);
+      const session = await api.createChatSession({ reportId: analysis.reportId });
       navigate(`/chat?session=${session.id}`);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Could not start AI chat session.');

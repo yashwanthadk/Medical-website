@@ -2,8 +2,7 @@ import crypto from 'node:crypto';
 import express, { type NextFunction, type Response } from 'express';
 import { config } from './core/config.ts';
 import { getDb, getPersistenceMode } from './core/database.ts';
-import type { AuthRequest } from './core/security.ts';
-import { authRouter } from './api/auth.ts';
+import { attachWorkspace, type WorkspaceRequest } from './core/security.ts';
 import { uploadsRouter } from './api/uploads.ts';
 import { analysisRouter } from './api/analysis.ts';
 import { dashboardRouter, historyRouter } from './api/dashboard.ts';
@@ -41,7 +40,7 @@ export function createApiApp(): express.Express {
   app.use(express.urlencoded({ extended: false }));
 
   // Attach request ID, CORS, and security headers
-  app.use((req: AuthRequest, res: Response, next: NextFunction) => {
+  app.use((req: WorkspaceRequest, res: Response, next: NextFunction) => {
     req.requestId = crypto.randomUUID();
     res.setHeader('X-Request-Id', req.requestId);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -52,7 +51,10 @@ export function createApiApp(): express.Express {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-Id');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Request-Id, X-Workspace-Id'
+      );
     }
 
     if (req.method === 'OPTIONS') {
@@ -62,6 +64,8 @@ export function createApiApp(): express.Express {
 
     next();
   });
+
+  app.use(attachWorkspace);
 
   // Health and Readiness probes
   app.get('/health', (_req, res) => {
@@ -87,8 +91,7 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // API v1 Routes
-  app.use('/api/v1/auth', authRouter);
+  // API v1 Routes (publicly accessible without authentication)
   app.use('/api/v1/uploads', uploadsRouter);
   app.use('/api/v1/analysis', analysisRouter);
   app.use('/api/v1/dashboard', dashboardRouter);
@@ -101,7 +104,7 @@ export function createApiApp(): express.Express {
   });
 
   // Global sanitized error handler (never leaks stack traces or sensitive data)
-  app.use((err: unknown, _req: AuthRequest, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, _req: WorkspaceRequest, res: Response, _next: NextFunction) => {
     console.error('Unhandled server error:', err instanceof Error ? err.message : 'Unknown error');
     res.status(500).json({ error: 'An unexpected server error occurred. Please try again.' });
   });

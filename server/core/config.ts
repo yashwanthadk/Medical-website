@@ -3,7 +3,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import firebaseConfig from '../../firebase-applet-config.json';
 
 dotenv.config();
 
@@ -22,15 +21,14 @@ export function ensureStorageDirs(): void {
   fs.mkdirSync(PRIVATE_STORAGE_DIR, { recursive: true });
 }
 
-function resolveSessionSecret(): string {
+function resolveSigningSecret(): string {
   if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 16) {
     return process.env.SESSION_SECRET;
   }
 
-  // On serverless (Vercel), /tmp is not shared across Lambdas, so derive a deterministic
-  // fallback from server-only env + project config if SESSION_SECRET wasn't explicitly set.
+  // On serverless (Vercel), derive a deterministic fallback from server env + deployment identity
   if (isServerless) {
-    const seed = `${process.env.GEMINI_API_KEY || ''}:${firebaseConfig.projectId}:${firebaseConfig.apiKey}`;
+    const seed = `${process.env.GEMINI_API_KEY || ''}:${process.env.VERCEL_PROJECT_ID || process.env.VERCEL_URL || 'mediexplain-ai'}`;
     return crypto.createHash('sha256').update(seed).digest('hex');
   }
 
@@ -59,8 +57,7 @@ export const config = {
   get databaseUrl(): string {
     return (process.env.DATABASE_URL || process.env.POSTGRES_URL || '').trim();
   },
-  sessionSecret: resolveSessionSecret(),
+  sessionSecret: resolveSigningSecret(),
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   geminiModel: 'gemini-4-hydrogen',
-  sessionTtlSeconds: 60 * 60 * 24 * 7, // 7 days
 };

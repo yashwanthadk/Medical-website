@@ -2,10 +2,10 @@ import { Router, type Response } from 'express';
 import { getDb } from '../core/database.ts';
 import {
   asyncHandler,
+  DEFAULT_WORKSPACE_ID,
   logAudit,
-  requireAuth,
   signFileAccessToken,
-  type AuthRequest,
+  type WorkspaceRequest,
 } from '../core/security.ts';
 import { deletePrivateFile } from '../services/fileValidation.ts';
 
@@ -15,9 +15,8 @@ export const historyRouter = Router();
 // GET /api/v1/dashboard/summary
 dashboardRouter.get(
   '/summary',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const db = await getDb();
 
     const counts = await db.queryOne<{
@@ -37,7 +36,7 @@ dashboardRouter.get(
          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as "completedCount"
        FROM medical_reports
        WHERE user_id = ?`,
-      [userId]
+      [workspaceId]
     );
 
     const recentReports = await db.queryAll<{
@@ -58,7 +57,7 @@ dashboardRouter.get(
        WHERE r.user_id = ?
        ORDER BY r.created_at DESC
        LIMIT 6`,
-      [userId]
+      [workspaceId]
     );
 
     const bloodDistributionRaw = await db.queryAll<{ status: string; count: number | string }>(
@@ -66,7 +65,7 @@ dashboardRouter.get(
        FROM blood_test_results
        WHERE user_id = ?
        GROUP BY status`,
-      [userId]
+      [workspaceId]
     );
 
     res.json({
@@ -93,9 +92,8 @@ dashboardRouter.get(
 // GET /api/v1/history
 historyRouter.get(
   '/',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const typeFilter = typeof req.query.type === 'string' ? req.query.type.toLowerCase() : 'all';
     const search = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
     const db = await getDb();
@@ -110,7 +108,7 @@ historyRouter.get(
       LEFT JOIN uploaded_files f ON f.report_id = r.id
       WHERE r.user_id = ?
     `;
-    const params: unknown[] = [userId];
+    const params: unknown[] = [workspaceId];
 
     if (['xray', 'mri', 'blood'].includes(typeFilter)) {
       sql += ' AND r.report_type = ?';
@@ -149,9 +147,8 @@ historyRouter.get(
 // GET /api/v1/history/:reportId
 historyRouter.get(
   '/:reportId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const reportId = String(req.params.reportId || '');
     const db = await getDb();
 
@@ -195,7 +192,7 @@ historyRouter.get(
       res.status(404).json({ error: 'Report not found.' });
       return;
     }
-    if (row.user_id !== userId) {
+    if (row.user_id !== workspaceId) {
       res.status(403).json({ error: 'Forbidden: you do not have access to this medical report.' });
       return;
     }
@@ -219,7 +216,7 @@ historyRouter.get(
           )
         : [];
 
-    const previewToken = row.fileId ? signFileAccessToken(row.fileId, userId, 900) : null;
+    const previewToken = row.fileId ? signFileAccessToken(row.fileId, workspaceId, 86400) : null;
 
     res.json({
       reportId: row.reportId,
@@ -255,9 +252,8 @@ historyRouter.get(
 // DELETE /api/v1/history/:reportId
 historyRouter.delete(
   '/:reportId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const reportId = String(req.params.reportId || '');
     const db = await getDb();
 
@@ -270,14 +266,14 @@ historyRouter.delete(
       res.status(404).json({ error: 'Medical report not found.' });
       return;
     }
-    if (report.user_id !== userId) {
-      res.status(403).json({ error: 'Forbidden: you cannot delete another user’s report.' });
+    if (report.user_id !== workspaceId) {
+      res.status(403).json({ error: 'Forbidden: you cannot delete another workspace’s report.' });
       return;
     }
 
     const files = await db.queryAll<{ id: string; storage_path: string }>(
       'SELECT id, storage_path FROM uploaded_files WHERE report_id = ? AND user_id = ?',
-      [reportId, userId]
+      [reportId, workspaceId]
     );
 
     for (const f of files) {
@@ -287,11 +283,11 @@ historyRouter.delete(
 
     await db.execute('DELETE FROM medical_reports WHERE id = ? AND user_id = ?', [
       reportId,
-      userId,
+      workspaceId,
     ]);
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: 'REPORT_DELETED',
       resourceType: 'medical_report',

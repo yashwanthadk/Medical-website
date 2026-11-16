@@ -2,52 +2,16 @@ import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { config } from './config.ts';
 import { getDb } from './database.ts';
-import { adminAuth } from './firebaseAdmin.ts';
 
-export interface AuthUser {
-  id: string;
-  email: string;
-  displayName: string;
-  role: string;
-  firebaseUid: string | null;
-}
+export const DEFAULT_WORKSPACE_ID = 'public-workspace';
+const WORKSPACE_ID_PATTERN = /^[a-zA-Z0-9_-]{8,64}$/;
 
-export interface AuthRequest extends Request {
-  authUser?: AuthUser;
+export interface WorkspaceRequest extends Request {
+  workspaceId?: string;
   requestId?: string;
 }
 
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${derived}`;
-}
-
-export function verifyPassword(password: string, storedHash: string): boolean {
-  const parts = storedHash.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, keyHex] = parts;
-  const keyBuf = Buffer.from(keyHex, 'hex');
-  const derivedBuf = crypto.scryptSync(password, salt, 64);
-  if (keyBuf.length !== derivedBuf.length) return false;
-  return crypto.timingSafeEqual(keyBuf, derivedBuf);
-}
-
-export function validatePasswordStrength(password: string): { valid: boolean; reason?: string } {
-  if (typeof password !== 'string' || password.length < 8) {
-    return { valid: false, reason: 'Password must be at least 8 characters long.' };
-  }
-  if (password.length > 128) {
-    return { valid: false, reason: 'Password must not exceed 128 characters.' };
-  }
-  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
-    return {
-      valid: false,
-      reason: 'Password must include at least one uppercase letter, one lowercase letter, and one number.',
-    };
-  }
-  return { valid: true };
-}
+export type AuthRequest = WorkspaceRequest;
 
 function base64UrlEncode(data: string | Buffer): string {
   return Buffer.from(data)
@@ -57,82 +21,35 @@ function base64UrlEncode(data: string | Buffer): string {
     .replace(/\//g, '_');
 }
 
-function base64UrlDecode(str: string): string {
-  const padded = str + '='.repeat((4 - (str.length % 4)) % 4);
-  return Buffer.from(padded.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-}
-
-export interface SessionTokenPayload {
-  sub: string;
-  email: string;
-  displayName?: string;
-  role?: string;
-  iat: number;
-  exp: number;
-}
-
-export function signSessionToken(
-  userId: string,
-  email: string,
-  displayName?: string,
-  role = 'patient'
-): string {
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = base64UrlEncode(
-    JSON.stringify({
-      sub: userId,
-      email,
-      displayName,
-      role,
-      iat: now,
-      exp: now + config.sessionTtlSeconds,
-    } satisfies SessionTokenPayload)
-  );
-  const sig = base64UrlEncode(
-    crypto.createHmac('sha256', config.sessionSecret).update(`${header}.${payload}`).digest()
-  );
-  return `${header}.${payload}.${sig}`;
-}
-
-export function verifySessionToken(token: string): SessionTokenPayload | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [header, payload, signature] = parts;
-    const expectedSig = base64UrlEncode(
-      crypto.createHmac('sha256', config.sessionSecret).update(`${header}.${payload}`).digest()
-    );
-    const sigBuf = Buffer.from(signature);
-    const expBuf = Buffer.from(expectedSig);
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-      return null;
-    }
-    const decoded = JSON.parse(base64UrlDecode(payload)) as SessionTokenPayload;
-    if (!decoded.sub || !decoded.exp || decoded.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-    return decoded;
-  } catch {
-    return null;
+export function resolveWorkspaceId(req: Request): string {
+  const raw = req.headers['x-workspace-id'];
+  const headerVal = typeof raw === 'string' ? raw.trim() : '';
+  if (WORKSPACE_ID_PATTERN.test(headerVal)) {
+    return headerVal;
   }
+  return DEFAULT_WORKSPACE_ID;
 }
 
-export function signFileAccessToken(fileId: string, userId: string, ttlSeconds = 300): string {
+export function attachWorkspace(req: WorkspaceRequest, _res: Response, next: NextFunction): void {
+  req.workspaceId = resolveWorkspaceId(req);
+  next();
+}
+
+export function signFileAccessToken(fileId: string, ownerId: string, ttlSeconds = 86400): string {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const data = `${fileId}:${userId}:${exp}`;
+  const data = `${fileId}:${ownerId}:${exp}`;
   const sig = base64UrlEncode(
     crypto.createHmac('sha256', config.sessionSecret).update(data).digest()
   );
   return `${exp}.${sig}`;
 }
 
-export function verifyFileAccessToken(token: string, fileId: string, ownerUserId: string): boolean {
+export function verifyFileAccessToken(token: string, fileId: string, ownerId: string): boolean {
   try {
     const [expStr, sig] = token.split('.');
     const exp = Number(expStr);
     if (!exp || exp < Math.floor(Date.now() / 1000)) return false;
-    const data = `${fileId}:${ownerUserId}:${exp}`;
+    const data = `${fileId}:${ownerId}:${exp}`;
     const expectedSig = base64UrlEncode(
       crypto.createHmac('sha256', config.sessionSecret).update(data).digest()
     );
@@ -144,145 +61,13 @@ export function verifyFileAccessToken(token: string, fileId: string, ownerUserId
   }
 }
 
-export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
-  const db = await getDb();
-
-  // 1. Try local HMAC-signed JWT session token
-  const localPayload = verifySessionToken(token);
-  if (localPayload) {
-    const row = await db.queryOne<{
-      id: string;
-      firebase_uid: string | null;
-      email: string;
-      display_name: string;
-      role: string;
-    }>('SELECT id, firebase_uid, email, display_name, role FROM users WHERE id = ?', [
-      localPayload.sub,
-    ]);
-
-    if (row) {
-      return {
-        id: row.id,
-        email: row.email,
-        displayName: row.display_name,
-        role: row.role,
-        firebaseUid: row.firebase_uid,
-      };
-    }
-
-    // In serverless fallback (/tmp) when DATABASE_URL isn't set, auto-hydrate user from verified JWT
-    if (config.isServerless && !config.databaseUrl && localPayload.email) {
-      const now = new Date().toISOString();
-      const displayName = localPayload.displayName || localPayload.email.split('@')[0];
-      await db.execute(
-        `INSERT INTO users (id, firebase_uid, email, display_name, password_hash, role, created_at, updated_at)
-         VALUES (?, NULL, ?, ?, NULL, ?, ?, ?)
-         ON CONFLICT (email) DO NOTHING`,
-        [
-          localPayload.sub,
-          localPayload.email,
-          displayName,
-          localPayload.role || 'patient',
-          now,
-          now,
-        ]
-      );
-      return {
-        id: localPayload.sub,
-        email: localPayload.email,
-        displayName,
-        role: localPayload.role || 'patient',
-        firebaseUid: null,
-      };
-    }
-
-    return null;
-  }
-
-  // 2. Fallback to verifying Firebase Auth ID Token
-  try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    const email = (decoded.email || '').toLowerCase();
-    if (!email) return null;
-
-    const existing = await db.queryOne<{
-      id: string;
-      firebase_uid: string | null;
-      email: string;
-      display_name: string;
-      role: string;
-    }>('SELECT id, firebase_uid, email, display_name, role FROM users WHERE firebase_uid = ? OR email = ?', [
-      decoded.uid,
-      email,
-    ]);
-
-    if (existing) {
-      if (!existing.firebase_uid) {
-        await db.execute('UPDATE users SET firebase_uid = ?, updated_at = ? WHERE id = ?', [
-          decoded.uid,
-          new Date().toISOString(),
-          existing.id,
-        ]);
-      }
-      return {
-        id: existing.id,
-        email: existing.email,
-        displayName: existing.display_name,
-        role: existing.role,
-        firebaseUid: decoded.uid,
-      };
-    }
-
-    const now = new Date().toISOString();
-    const newId = crypto.randomUUID();
-    const displayName = decoded.name || email.split('@')[0];
-    await db.execute(
-      `INSERT INTO users (id, firebase_uid, email, display_name, password_hash, role, created_at, updated_at)
-       VALUES (?, ?, ?, ?, NULL, 'patient', ?, ?)`,
-      [newId, decoded.uid, email, displayName, now, now]
-    );
-
-    return {
-      id: newId,
-      email,
-      displayName,
-      role: 'patient',
-      firebaseUid: decoded.uid,
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function asyncHandler(
-  fn: (req: AuthRequest, res: Response, next: NextFunction) => Promise<unknown>
+  fn: (req: WorkspaceRequest, res: Response, next: NextFunction) => Promise<unknown>
 ) {
-  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+  return (req: WorkspaceRequest, res: Response, next: NextFunction): void => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 }
-
-export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Authentication required. Please sign in.' });
-      return;
-    }
-
-    const token = authHeader.slice('Bearer '.length).trim();
-    const user = await resolveAuthUser(token);
-    if (!user) {
-      res.status(401).json({ error: 'Invalid or expired authentication session.' });
-      return;
-    }
-
-    req.authUser = user;
-    next();
-  } catch (err) {
-    next(err);
-  }
-};
 
 export async function logAudit(params: {
   userId?: string | null;
@@ -318,8 +103,8 @@ export async function logAudit(params: {
 const rateBuckets = new Map<string, number[]>();
 
 export function createRateLimiter(windowMs: number, maxRequests: number) {
-  return (req: AuthRequest, res: Response, next: NextFunction): void => {
-    const key = `${req.path}:${req.authUser?.id || req.ip || 'anon'}`;
+  return (req: WorkspaceRequest, res: Response, next: NextFunction): void => {
+    const key = `${req.path}:${req.workspaceId || req.ip || 'anon'}`;
     const now = Date.now();
     const entries = (rateBuckets.get(key) || []).filter((t) => now - t < windowMs);
     if (entries.length >= maxRequests) {

@@ -1,10 +1,8 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
 
 export function PublicHeader() {
-  const { user } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -63,23 +61,15 @@ export function PublicHeader() {
           >
             About Us
           </Link>
-          {!user && (
-            <Link
-              to="/login"
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
-            >
-              Login
-            </Link>
-          )}
         </nav>
 
         {/* Zone 3: Single primary action */}
         <div className="flex items-center gap-3 shrink-0">
           <Link
-            to={user ? '/dashboard' : '/signup'}
+            to="/dashboard"
             className="hidden md:inline-flex items-center justify-center rounded-lg bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
           >
-            {user ? 'Open Dashboard' : 'Get Started'}
+            Get Started
           </Link>
 
           <button
@@ -123,22 +113,13 @@ export function PublicHeader() {
           >
             About Us
           </Link>
-          {!user && (
-            <Link
-              to="/login"
-              onClick={() => setMobileOpen(false)}
-              className="block py-2.5 text-sm font-medium text-slate-700 hover:text-slate-900"
-            >
-              Login
-            </Link>
-          )}
           <div className="pt-2">
             <Link
-              to={user ? '/dashboard' : '/signup'}
+              to="/dashboard"
               onClick={() => setMobileOpen(false)}
               className="flex h-11 w-full items-center justify-center rounded-lg bg-sky-700 px-5 text-sm font-semibold text-white hover:bg-sky-800"
             >
-              {user ? 'Open Dashboard' : 'Get Started'}
+              Get Started
             </Link>
           </div>
         </div>

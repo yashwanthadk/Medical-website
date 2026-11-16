@@ -6,12 +6,11 @@ import { config } from '../core/config.ts';
 import { getDb } from '../core/database.ts';
 import {
   asyncHandler,
+  DEFAULT_WORKSPACE_ID,
   logAudit,
-  requireAuth,
-  resolveAuthUser,
   signFileAccessToken,
   verifyFileAccessToken,
-  type AuthRequest,
+  type WorkspaceRequest,
 } from '../core/security.ts';
 import {
   deletePrivateFile,
@@ -29,7 +28,7 @@ const uploadMiddleware = multer({
   },
 });
 
-function handleMulterUpload(req: AuthRequest, res: Response, next: () => void): void {
+function handleMulterUpload(req: WorkspaceRequest, res: Response, next: () => void): void {
   uploadMiddleware.single('file')(req, res, (err: unknown) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
@@ -50,10 +49,9 @@ function handleMulterUpload(req: AuthRequest, res: Response, next: () => void): 
 // POST /api/v1/uploads
 uploadsRouter.post(
   '/',
-  requireAuth,
   handleMulterUpload,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const category = String(req.body?.category || '').toLowerCase() as FileCategory;
 
     if (!['xray', 'mri', 'blood'].includes(category)) {
@@ -73,7 +71,7 @@ uploadsRouter.post(
         originalName: req.file.originalname,
         declaredMime: req.file.mimetype,
         category,
-        userId,
+        userId: workspaceId,
       });
     } catch (err) {
       res.status(400).json({
@@ -87,7 +85,7 @@ uploadsRouter.post(
       `SELECT id, created_at FROM uploaded_files
        WHERE user_id = ? AND sha256_hash = ? AND file_category = ?
        ORDER BY created_at DESC LIMIT 1`,
-      [userId, validated.sha256Hash, category]
+      [workspaceId, validated.sha256Hash, category]
     );
 
     const fileId = crypto.randomUUID();
@@ -100,7 +98,7 @@ uploadsRouter.post(
       ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         fileId,
-        userId,
+        workspaceId,
         validated.safeOriginalName,
         validated.storedFilename,
         validated.storagePath,
@@ -113,10 +111,10 @@ uploadsRouter.post(
       ]
     );
 
-    const previewToken = signFileAccessToken(fileId, userId, 900);
+    const previewToken = signFileAccessToken(fileId, workspaceId, 86400);
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: 'FILE_UPLOADED',
       resourceType: 'uploaded_file',
@@ -139,11 +137,12 @@ uploadsRouter.post(
   })
 );
 
-// GET /api/v1/uploads/:fileId (Protected via Bearer auth OR short-lived signed token)
+// GET /api/v1/uploads/:fileId (Protected via signed preview token OR matching workspace header)
 uploadsRouter.get(
   '/:fileId',
-  asyncHandler(async (req: AuthRequest, res: Response) => {
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
     const fileId = String(req.params.fileId || '');
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const db = await getDb();
 
     const fileRow = await db.queryOne<{
@@ -167,11 +166,8 @@ uploadsRouter.get(
     const queryToken = typeof req.query.token === 'string' ? req.query.token : '';
     if (queryToken && verifyFileAccessToken(queryToken, fileRow.id, fileRow.user_id)) {
       authorized = true;
-    } else if (req.headers.authorization?.startsWith('Bearer ')) {
-      const authUser = await resolveAuthUser(req.headers.authorization.slice('Bearer '.length).trim());
-      if (authUser && authUser.id === fileRow.user_id) {
-        authorized = true;
-      }
+    } else if (workspaceId === fileRow.user_id) {
+      authorized = true;
     }
 
     if (!authorized) {
@@ -204,10 +200,9 @@ uploadsRouter.get(
 // DELETE /api/v1/uploads/:fileId
 uploadsRouter.delete(
   '/:fileId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
     const fileId = String(req.params.fileId || '');
-    const userId = req.authUser!.id;
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const db = await getDb();
 
     const fileRow = await db.queryOne<{ id: string; user_id: string; storage_path: string }>(
@@ -219,16 +214,19 @@ uploadsRouter.delete(
       res.status(404).json({ error: 'File not found.' });
       return;
     }
-    if (fileRow.user_id !== userId) {
-      res.status(403).json({ error: 'Forbidden: you cannot delete another user’s file.' });
+    if (fileRow.user_id !== workspaceId) {
+      res.status(403).json({ error: 'Forbidden: you cannot delete another workspace’s file.' });
       return;
     }
 
     deletePrivateFile(fileRow.storage_path);
-    await db.execute('DELETE FROM uploaded_files WHERE id = ? AND user_id = ?', [fileId, userId]);
+    await db.execute('DELETE FROM uploaded_files WHERE id = ? AND user_id = ?', [
+      fileId,
+      workspaceId,
+    ]);
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: 'FILE_DELETED',
       resourceType: 'uploaded_file',

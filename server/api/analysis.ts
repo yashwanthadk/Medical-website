@@ -5,10 +5,10 @@ import { getDb } from '../core/database.ts';
 import {
   asyncHandler,
   createRateLimiter,
+  DEFAULT_WORKSPACE_ID,
   logAudit,
-  requireAuth,
   signFileAccessToken,
-  type AuthRequest,
+  type WorkspaceRequest,
 } from '../core/security.ts';
 import { enqueueAnalysisJob } from '../workers/analysisWorker.ts';
 
@@ -16,8 +16,8 @@ export const analysisRouter = Router();
 const aiLimiter = createRateLimiter(60_000, 20);
 
 function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
-  return asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  return asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const { fileId, title, clinicalNotes } = req.body ?? {};
 
     if (typeof fileId !== 'string' || !fileId.trim()) {
@@ -43,8 +43,8 @@ function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
       res.status(404).json({ error: 'Uploaded file not found.' });
       return;
     }
-    if (fileRow.user_id !== userId) {
-      res.status(403).json({ error: 'Forbidden: you do not own this uploaded file.' });
+    if (fileRow.user_id !== workspaceId) {
+      res.status(403).json({ error: 'Forbidden: you do not have access to this uploaded file.' });
       return;
     }
     if (fileRow.file_category !== reportType) {
@@ -68,7 +68,7 @@ function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
       await tx.execute(
         `INSERT INTO medical_reports (id, user_id, report_type, title, clinical_notes, status, urgent_flag, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 'uploaded', 0, ?, ?)`,
-        [reportId, userId, reportType, cleanTitle, cleanNotes, now, now]
+        [reportId, workspaceId, reportType, cleanTitle, cleanNotes, now, now]
       );
 
       await tx.execute('UPDATE uploaded_files SET report_id = ? WHERE id = ?', [
@@ -79,14 +79,14 @@ function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
       await tx.execute(
         `INSERT INTO analyses (id, report_id, user_id, model_name, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [analysisId, reportId, userId, config.geminiModel, now, now]
+        [analysisId, reportId, workspaceId, config.geminiModel, now, now]
       );
     });
 
     const jobResult = await enqueueAnalysisJob({
       reportId,
       analysisId,
-      userId,
+      userId: workspaceId,
       fileId: fileRow.id,
       jobType: reportType,
       filePath: fileRow.storage_path,
@@ -95,7 +95,7 @@ function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
     });
 
     await logAudit({
-      userId,
+      userId: workspaceId,
       requestId: req.requestId || 'req',
       action: `ANALYSIS_${reportType.toUpperCase()}_STARTED`,
       resourceType: 'analysis',
@@ -113,16 +113,15 @@ function triggerAnalysis(reportType: 'xray' | 'mri' | 'blood') {
   });
 }
 
-analysisRouter.post('/xray', requireAuth, aiLimiter, triggerAnalysis('xray'));
-analysisRouter.post('/mri', requireAuth, aiLimiter, triggerAnalysis('mri'));
-analysisRouter.post('/blood', requireAuth, aiLimiter, triggerAnalysis('blood'));
+analysisRouter.post('/xray', aiLimiter, triggerAnalysis('xray'));
+analysisRouter.post('/mri', aiLimiter, triggerAnalysis('mri'));
+analysisRouter.post('/blood', aiLimiter, triggerAnalysis('blood'));
 
 // GET /api/v1/analysis/:analysisId/status
 analysisRouter.get(
   '/:analysisId/status',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const analysisId = String(req.params.analysisId || '');
     const db = await getDb();
 
@@ -151,7 +150,7 @@ analysisRouter.get(
       res.status(404).json({ error: 'Analysis job not found.' });
       return;
     }
-    if (row.user_id !== userId) {
+    if (row.user_id !== workspaceId) {
       res.status(403).json({ error: 'Forbidden: you do not have access to this analysis.' });
       return;
     }
@@ -174,9 +173,8 @@ analysisRouter.get(
 // GET /api/v1/analysis/:analysisId
 analysisRouter.get(
   '/:analysisId',
-  requireAuth,
-  asyncHandler(async (req: AuthRequest, res: Response) => {
-    const userId = req.authUser!.id;
+  asyncHandler(async (req: WorkspaceRequest, res: Response) => {
+    const workspaceId = req.workspaceId || DEFAULT_WORKSPACE_ID;
     const analysisId = String(req.params.analysisId || '');
     const db = await getDb();
 
@@ -220,7 +218,7 @@ analysisRouter.get(
       res.status(404).json({ error: 'Analysis not found.' });
       return;
     }
-    if (row.user_id !== userId) {
+    if (row.user_id !== workspaceId) {
       res.status(403).json({ error: 'Forbidden: you do not have access to this analysis.' });
       return;
     }
@@ -244,7 +242,7 @@ analysisRouter.get(
           )
         : [];
 
-    const previewToken = row.file_id ? signFileAccessToken(row.file_id, userId, 900) : null;
+    const previewToken = row.file_id ? signFileAccessToken(row.file_id, workspaceId, 86400) : null;
 
     res.json({
       analysisId: row.analysis_id,

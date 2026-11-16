@@ -62,20 +62,23 @@ async function openSqlite(): Promise<SqliteLikeDb> {
     db = instance as unknown as SqliteLikeDb;
   }
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      firebase_uid TEXT UNIQUE,
-      email TEXT NOT NULL UNIQUE,
-      display_name TEXT NOT NULL,
-      password_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'patient',
-      reset_code_hash TEXT,
-      reset_code_expires_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
+  // If upgrading an existing local SQLite DB that previously enforced FK references to `users`,
+  // disable legacy user-table FK dependency safely so login-free workspaces work without errors.
+  try {
+    const legacyUsers = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+      .get();
+    if (legacyUsers) {
+      db.exec(`
+        PRAGMA foreign_keys = OFF;
+        DROP TABLE IF EXISTS users;
+      `);
+    }
+  } catch {
+    // Ignore inspection errors on fresh DBs
+  }
 
+  db.exec(`
     CREATE TABLE IF NOT EXISTS medical_reports (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -85,8 +88,7 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       status TEXT NOT NULL CHECK (status IN ('uploaded', 'queued', 'processing', 'completed', 'failed')),
       urgent_flag INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS uploaded_files (
@@ -102,7 +104,6 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       file_category TEXT NOT NULL CHECK (file_category IN ('xray', 'mri', 'blood')),
       file_data BLOB,
       created_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE SET NULL
     );
 
@@ -121,8 +122,7 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       error_message TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS blood_test_results (
@@ -143,8 +143,7 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE,
-      FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -154,7 +153,6 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       title TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE SET NULL
     );
 
@@ -165,8 +163,7 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS processing_jobs (
@@ -183,8 +180,7 @@ async function openSqlite(): Promise<SqliteLikeDb> {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (report_id) REFERENCES medical_reports(id) ON DELETE CASCADE,
-      FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -231,22 +227,9 @@ async function openSqlite(): Promise<SqliteLikeDb> {
 
 async function initPostgresSchema(pool: Pool): Promise<void> {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      firebase_uid TEXT UNIQUE,
-      email TEXT NOT NULL UNIQUE,
-      display_name TEXT NOT NULL,
-      password_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'patient',
-      reset_code_hash TEXT,
-      reset_code_expires_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
     CREATE TABLE IF NOT EXISTS medical_reports (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       report_type TEXT NOT NULL CHECK (report_type IN ('xray', 'mri', 'blood')),
       title TEXT NOT NULL,
       clinical_notes TEXT DEFAULT '',
@@ -258,7 +241,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS uploaded_files (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       report_id TEXT REFERENCES medical_reports(id) ON DELETE SET NULL,
       original_filename TEXT NOT NULL,
       stored_filename TEXT NOT NULL,
@@ -274,7 +257,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS analyses (
       id TEXT PRIMARY KEY,
       report_id TEXT NOT NULL UNIQUE REFERENCES medical_reports(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       model_name TEXT NOT NULL,
       summary_plain TEXT NOT NULL DEFAULT '',
       structured_json TEXT NOT NULL DEFAULT '{}',
@@ -292,7 +275,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
       id TEXT PRIMARY KEY,
       analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
       report_id TEXT NOT NULL REFERENCES medical_reports(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       test_name TEXT NOT NULL,
       measured_value TEXT NOT NULL,
       numeric_value DOUBLE PRECISION,
@@ -309,7 +292,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       report_id TEXT REFERENCES medical_reports(id) ON DELETE SET NULL,
       title TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -319,7 +302,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -329,7 +312,7 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
       id TEXT PRIMARY KEY,
       report_id TEXT NOT NULL REFERENCES medical_reports(id) ON DELETE CASCADE,
       analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
       job_type TEXT NOT NULL CHECK (job_type IN ('xray', 'mri', 'blood')),
       status TEXT NOT NULL CHECK (status IN ('uploaded', 'queued', 'processing', 'completed', 'failed')),
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -351,6 +334,16 @@ async function initPostgresSchema(pool: Pool): Promise<void> {
       ip_address TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+
+    -- Remove legacy user-table foreign key constraints if migrating an existing PostgreSQL database
+    ALTER TABLE IF EXISTS medical_reports DROP CONSTRAINT IF EXISTS medical_reports_user_id_fkey;
+    ALTER TABLE IF EXISTS uploaded_files DROP CONSTRAINT IF EXISTS uploaded_files_user_id_fkey;
+    ALTER TABLE IF EXISTS analyses DROP CONSTRAINT IF EXISTS analyses_user_id_fkey;
+    ALTER TABLE IF EXISTS blood_test_results DROP CONSTRAINT IF EXISTS blood_test_results_user_id_fkey;
+    ALTER TABLE IF EXISTS chat_sessions DROP CONSTRAINT IF EXISTS chat_sessions_user_id_fkey;
+    ALTER TABLE IF EXISTS chat_messages DROP CONSTRAINT IF EXISTS chat_messages_user_id_fkey;
+    ALTER TABLE IF EXISTS processing_jobs DROP CONSTRAINT IF EXISTS processing_jobs_user_id_fkey;
+    DROP TABLE IF EXISTS users;
 
     CREATE INDEX IF NOT EXISTS idx_reports_user_created ON medical_reports(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_files_user_hash ON uploaded_files(user_id, sha256_hash);

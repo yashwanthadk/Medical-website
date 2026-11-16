@@ -21,7 +21,6 @@ import {
   YAxis,
 } from 'recharts';
 import { DashboardLayout } from '../components/DashboardLayout';
-import { useAuth } from '../context/AuthContext';
 import { api, type DashboardSummary } from '../lib/api';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -32,17 +31,15 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function DashboardPage() {
-  const { token, user } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
     let cancelled = false;
     setLoading(true);
     api
-      .getDashboardSummary(token)
+      .getDashboardSummary()
       .then((data) => {
         if (!cancelled) setSummary(data);
       })
@@ -55,7 +52,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, []);
 
   const getReportHref = (reportType: string, reportId: string) => {
     if (reportType === 'xray') return `/xray?reportId=${reportId}`;
@@ -65,7 +62,7 @@ export function DashboardPage() {
 
   return (
     <DashboardLayout
-      title={`Welcome, ${user?.displayName || 'Patient'}`}
+      title="Medical Report Dashboard"
       subtitle="Your unified workspace for X-ray, MRI, blood report explanations, and medical Q&A"
     >
       <div className="space-y-8">

@@ -1,10 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
-import { ProtectedRoute } from './components/ProtectedRoute';
 import { HomePage } from './pages/HomePage';
-import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
-import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { XRayAnalysisPage } from './pages/XRayAnalysisPage';
 import { MRIAnalysisPage } from './pages/MRIAnalysisPage';
@@ -17,67 +12,18 @@ import { PrivacyPage } from './pages/PrivacyPage';
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/signup" element={<SignupPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <DashboardPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/xray"
-            element={
-              <ProtectedRoute>
-                <XRayAnalysisPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/mri"
-            element={
-              <ProtectedRoute>
-                <MRIAnalysisPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/blood-reports"
-            element={
-              <ProtectedRoute>
-                <BloodReportPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/chat"
-            element={
-              <ProtectedRoute>
-                <ChatPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/history"
-            element={
-              <ProtectedRoute>
-                <HistoryPage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AuthProvider>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/about" element={<AboutPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/xray" element={<XRayAnalysisPage />} />
+        <Route path="/mri" element={<MRIAnalysisPage />} />
+        <Route path="/blood-reports" element={<BloodReportPage />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/history" element={<HistoryPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </BrowserRouter>
   );
 }

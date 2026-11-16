@@ -47,8 +47,18 @@ export function PublicFooter() {
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900">Trust &amp; Access</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Workspace &amp; Trust</h3>
             <ul className="space-y-2 text-sm text-slate-600">
+              <li>
+                <Link to="/dashboard" className="hover:text-slate-900 transition-colors">
+                  Dashboard
+                </Link>
+              </li>
+              <li>
+                <Link to="/history" className="hover:text-slate-900 transition-colors">
+                  Analysis History
+                </Link>
+              </li>
               <li>
                 <Link to="/about" className="hover:text-slate-900 transition-colors">
                   About Us
@@ -57,21 +67,6 @@ export function PublicFooter() {
               <li>
                 <Link to="/privacy" className="hover:text-slate-900 transition-colors">
                   Privacy Policy
-                </Link>
-              </li>
-              <li>
-                <Link to="/login" className="hover:text-slate-900 transition-colors">
-                  Sign In
-                </Link>
-              </li>
-              <li>
-                <Link to="/signup" className="hover:text-slate-900 transition-colors">
-                  Create Account
-                </Link>
-              </li>
-              <li>
-                <Link to="/reset-password" className="hover:text-slate-900 transition-colors">
-                  Reset Password
                 </Link>
               </li>
             </ul>
